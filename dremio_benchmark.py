@@ -14,6 +14,7 @@ class DremioClient:
         self.username = username
         self.password = password
         self.token = None
+        print(f"Attempting to connect to Dremio at: {self.base_url}")
         self._authenticate()
 
     def _authenticate(self) -> None:
@@ -24,9 +25,26 @@ class DremioClient:
             "password": self.password
         }
         
-        response = requests.post(auth_url, json=auth_data)
-        response.raise_for_status()
-        self.token = response.json()["token"]
+        try:
+            print(f"Attempting authentication to: {auth_url}")
+            response = requests.post(auth_url, json=auth_data, timeout=10)
+            response.raise_for_status()
+            self.token = response.json()["token"]
+            print("Authentication successful!")
+        except requests.exceptions.ConnectionError:
+            print(f"Connection Error: Could not connect to {auth_url}")
+            print("Please check:")
+            print("1. Is the Dremio server running?")
+            print("2. Is the URL correct? (should be like http://hostname:9047)")
+            print("3. Are you able to ping the host?")
+            print("4. Is port 9047 open and accessible?")
+            raise
+        except requests.exceptions.Timeout:
+            print(f"Timeout Error: Server at {auth_url} did not respond within 10 seconds")
+            raise
+        except requests.exceptions.RequestException as e:
+            print(f"Request Error: {str(e)}")
+            raise
 
     def verify_source(self, source_name: str) -> bool:
         """Verify if a source exists in Dremio."""
@@ -60,24 +78,39 @@ class DremioClient:
             "context": []
         }
         
-        # Submit query
-        response = requests.post(query_url, headers=headers, json=query_data)
-        response.raise_for_status()
-        job_id = response.json()["id"]
-        
-        # Poll for results
-        while True:
-            status_url = f"{self.base_url}/api/v3/job/{job_id}"
-            status_response = requests.get(status_url, headers=headers)
-            status_response.raise_for_status()
-            job_status = status_response.json()
+        try:
+            print(f"Executing query at: {query_url}")
+            response = requests.post(query_url, headers=headers, json=query_data, timeout=30)
+            response.raise_for_status()
+            job_id = response.json()["id"]
+            print(f"Query submitted successfully. Job ID: {job_id}")
             
-            if job_status["jobState"] == "COMPLETED":
-                return job_status
-            elif job_status["jobState"] in ["FAILED", "CANCELED"]:
-                raise Exception(f"Query failed: {job_status.get('errorMessage', 'Unknown error')}")
-            
-            time.sleep(1)
+            # Poll for results
+            while True:
+                status_url = f"{self.base_url}/api/v3/job/{job_id}"
+                status_response = requests.get(status_url, headers=headers, timeout=10)
+                status_response.raise_for_status()
+                job_status = status_response.json()
+                
+                if job_status["jobState"] == "COMPLETED":
+                    print("Query completed successfully")
+                    return job_status
+                elif job_status["jobState"] in ["FAILED", "CANCELED"]:
+                    error_msg = job_status.get("errorMessage", "Unknown error")
+                    print(f"Query failed: {error_msg}")
+                    raise Exception(f"Query failed: {error_msg}")
+                
+                time.sleep(1)
+        except requests.exceptions.ConnectionError:
+            print(f"Connection Error: Could not connect to {query_url}")
+            print("Please check your connection and try again")
+            raise
+        except requests.exceptions.Timeout:
+            print(f"Timeout Error: Server did not respond within the timeout period")
+            raise
+        except requests.exceptions.RequestException as e:
+            print(f"Request Error: {str(e)}")
+            raise
 
 class CrossDremioBenchmark:
     def __init__(self, dremio1_url: str, dremio1_username: str, dremio1_password: str,

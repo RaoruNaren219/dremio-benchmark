@@ -1,5 +1,7 @@
 # Environment variables
 .env
+.env.*
+!.env.template
 
 # Python
 __pycache__/
@@ -25,12 +27,32 @@ wheels/
 .installed.cfg
 *.egg
 
+# Virtual Environment
+venv/
+env/
+ENV/
+
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*.sublime-workspace
+*.sublime-project
 
 # OS
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Project specific
+/tpcds_data/
+/tpcds_parquet/
+*.log
+benchmark_results/
+*.csv
+*.dat
+*.parquet
+*.orc
+*.txt
+test_data/
+data_generation.log 
