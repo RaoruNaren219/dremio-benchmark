@@ -12,6 +12,8 @@ import json
 import psutil
 import hashlib
 from metrics_collector import MetricsCollector
+import pandas as pd
+import pyarrow as pa
 
 class DremioIngester:
     def __init__(self, dremio_url: str, username: str, password: str):

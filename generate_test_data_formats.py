@@ -9,156 +9,264 @@ import psutil
 import time
 from loguru import logger
 import math
+import pyorc
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import gc
 
 class DataGenerator:
-    def __init__(self, output_dir, scale_factors=[1, 10, 100]):
-        """
-        Initialize the data generator.
-        
-        Args:
-            output_dir (str): Base directory for output files
-            scale_factors (list): List of scale factors (1GB, 10GB, 100GB)
-        """
+    def __init__(self, output_dir: str = "test_data"):
+        """Initialize the data generator with output directory."""
         self.output_dir = output_dir
-        self.scale_factors = scale_factors
-        self.chunk_size = 100_000  # Number of rows per chunk
-        self.num_columns = 20  # Number of columns in the dataset
+        self.chunk_size = 100_000  # Reduced chunk size for better memory management
+        self.columns = {
+            'id': np.int64,
+            'name': str,
+            'age': np.int32,
+            'salary': np.float64,
+            'department': str,
+            'hire_date': str,
+            'is_active': bool,
+            'performance_score': np.float32,
+            'years_of_service': np.int32,
+            'bonus': np.float64
+        }
         
-        # Create output directories
-        for sf in scale_factors:
-            os.makedirs(os.path.join(output_dir, f'sf{sf}'), exist_ok=True)
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
         
         # Configure logging
         logger.add(
-            os.path.join(output_dir, "data_generation.log"),
-            rotation="500 MB",
-            level="INFO"
+            "data_generation.log",
+            rotation="1 day",
+            retention="7 days",
+            level="INFO",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
         )
 
-    def generate_chunk(self):
+    def _estimate_chunks(self, target_size_gb: float) -> int:
+        """Estimate number of chunks needed based on target size."""
+        # Sample size for estimation
+        sample_size = 1000
+        df_sample = pd.DataFrame({
+            'id': np.arange(sample_size, dtype=np.int64),
+            'name': [f'Employee_{i}' for i in range(sample_size)],
+            'age': np.random.randint(22, 65, sample_size, dtype=np.int32),
+            'salary': np.random.uniform(30000, 150000, sample_size).astype(np.float64),
+            'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing', 'Sales'], sample_size),
+            'hire_date': pd.date_range(start='2020-01-01', periods=sample_size, freq='D').strftime('%Y-%m-%d'),
+            'is_active': np.random.choice([True, False], sample_size),
+            'performance_score': np.random.uniform(0, 100, sample_size).astype(np.float32),
+            'years_of_service': np.random.randint(0, 20, sample_size, dtype=np.int32),
+            'bonus': np.random.uniform(0, 20000, sample_size).astype(np.float64)
+        })
+        
+        # Calculate size per row
+        sample_size_bytes = df_sample.memory_usage(deep=True).sum()
+        bytes_per_row = sample_size_bytes / sample_size
+        
+        # Calculate target size in bytes
+        target_size_bytes = target_size_gb * 1024 * 1024 * 1024
+        
+        # Estimate number of chunks needed
+        rows_needed = target_size_bytes / bytes_per_row
+        chunks_needed = int(np.ceil(rows_needed / self.chunk_size))
+        
+        return max(1, chunks_needed)
+
+    def _generate_chunk(self, start_idx: int, chunk_size: int) -> pd.DataFrame:
         """Generate a chunk of random data."""
         return pd.DataFrame({
-            f'col_{i}': np.random.randn(self.chunk_size) for i in range(self.num_columns)
+            'id': np.arange(start_idx, start_idx + chunk_size, dtype=np.int64),
+            'name': [f'Employee_{i}' for i in range(start_idx, start_idx + chunk_size)],
+            'age': np.random.randint(22, 65, chunk_size, dtype=np.int32),
+            'salary': np.random.uniform(30000, 150000, chunk_size).astype(np.float64),
+            'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing', 'Sales'], chunk_size),
+            'hire_date': pd.date_range(start='2020-01-01', periods=chunk_size, freq='D').strftime('%Y-%m-%d'),
+            'is_active': np.random.choice([True, False], chunk_size),
+            'performance_score': np.random.uniform(0, 100, chunk_size).astype(np.float32),
+            'years_of_service': np.random.randint(0, 20, chunk_size, dtype=np.int32),
+            'bonus': np.random.uniform(0, 20000, chunk_size).astype(np.float64)
         })
 
-    def estimate_chunks_needed(self, target_size_gb):
-        """Estimate number of chunks needed for target size."""
-        # Generate a sample chunk to measure size
-        sample_chunk = self.generate_chunk()
-        sample_size_bytes = len(sample_chunk.to_csv(index=False).encode('utf-8'))
-        chunks_needed = math.ceil((target_size_gb * 1024 * 1024 * 1024) / sample_size_bytes)
-        return chunks_needed
-
-    def generate_csv(self, scale_factor):
+    def generate_csv(self, target_size_gb: float, scale_factor: str) -> str:
         """Generate CSV file of specified size."""
-        target_size_gb = scale_factor
-        chunks_needed = self.estimate_chunks_needed(target_size_gb)
-        output_file = os.path.join(self.output_dir, f'sf{scale_factor}', f'data_{scale_factor}gb.csv')
+        output_file = os.path.join(self.output_dir, f"sf{scale_factor}", f"data_{target_size_gb}gb.csv")
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        logger.info(f"Generating {target_size_gb}GB CSV file...")
+        chunks = self._estimate_chunks(target_size_gb)
+        logger.info(f"Generating {target_size_gb}GB CSV file with {chunks} chunks")
+        
         start_time = time.time()
+        memory_usage = []
         
-        # Write header
-        self.generate_chunk().to_csv(output_file, index=False)
-        
-        # Append chunks
-        with open(output_file, 'a') as f:
-            for _ in tqdm(range(chunks_needed - 1), desc=f"Generating {target_size_gb}GB CSV"):
-                chunk = self.generate_chunk()
-                chunk.to_csv(f, header=False, index=False)
+        with tqdm(total=chunks, desc=f"Generating {target_size_gb}GB CSV") as pbar:
+            for i in range(chunks):
+                chunk_start = i * self.chunk_size
+                df_chunk = self._generate_chunk(chunk_start, self.chunk_size)
+                
+                # Write chunk to CSV
+                mode = 'w' if i == 0 else 'a'
+                header = i == 0
+                df_chunk.to_csv(output_file, mode=mode, header=header, index=False)
+                
+                # Memory management
+                del df_chunk
+                gc.collect()
+                
+                # Record memory usage
+                memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
+                
+                pbar.update(1)
         
         end_time = time.time()
-        logger.info(f"CSV generation completed in {end_time - start_time:.2f} seconds")
+        duration = end_time - start_time
+        avg_memory = sum(memory_usage) / len(memory_usage)
+        
+        logger.info(f"CSV generation completed in {duration:.2f} seconds")
+        logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
         return output_file
 
-    def generate_txt(self, scale_factor):
+    def generate_txt(self, target_size_gb: float, scale_factor: str) -> str:
         """Generate TXT file of specified size."""
-        target_size_gb = scale_factor
-        chunks_needed = self.estimate_chunks_needed(target_size_gb)
-        output_file = os.path.join(self.output_dir, f'sf{scale_factor}', f'data_{scale_factor}gb.txt')
+        output_file = os.path.join(self.output_dir, f"sf{scale_factor}", f"data_{target_size_gb}gb.txt")
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        logger.info(f"Generating {target_size_gb}GB TXT file...")
+        chunks = self._estimate_chunks(target_size_gb)
+        logger.info(f"Generating {target_size_gb}GB TXT file with {chunks} chunks")
+        
         start_time = time.time()
+        memory_usage = []
         
-        # Write header
-        self.generate_chunk().to_string(output_file, index=False)
-        
-        # Append chunks
-        with open(output_file, 'a') as f:
-            for _ in tqdm(range(chunks_needed - 1), desc=f"Generating {target_size_gb}GB TXT"):
-                chunk = self.generate_chunk()
-                chunk.to_string(f, header=False, index=False)
+        with tqdm(total=chunks, desc=f"Generating {target_size_gb}GB TXT") as pbar:
+            for i in range(chunks):
+                chunk_start = i * self.chunk_size
+                df_chunk = self._generate_chunk(chunk_start, self.chunk_size)
+                
+                # Write chunk to TXT
+                mode = 'w' if i == 0 else 'a'
+                header = i == 0
+                df_chunk.to_csv(output_file, mode=mode, header=header, index=False, sep='\t')
+                
+                # Memory management
+                del df_chunk
+                gc.collect()
+                
+                # Record memory usage
+                memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
+                
+                pbar.update(1)
         
         end_time = time.time()
-        logger.info(f"TXT generation completed in {end_time - start_time:.2f} seconds")
+        duration = end_time - start_time
+        avg_memory = sum(memory_usage) / len(memory_usage)
+        
+        logger.info(f"TXT generation completed in {duration:.2f} seconds")
+        logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
         return output_file
 
-    def generate_parquet(self, scale_factor):
+    def generate_parquet(self, target_size_gb: float, scale_factor: str) -> str:
         """Generate Parquet file of specified size."""
-        target_size_gb = scale_factor
-        chunks_needed = self.estimate_chunks_needed(target_size_gb)
-        output_file = os.path.join(self.output_dir, f'sf{scale_factor}', f'data_{scale_factor}gb.parquet')
+        output_file = os.path.join(self.output_dir, f"sf{scale_factor}", f"data_{target_size_gb}gb.parquet")
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        logger.info(f"Generating {target_size_gb}GB Parquet file...")
+        chunks = self._estimate_chunks(target_size_gb)
+        logger.info(f"Generating {target_size_gb}GB Parquet file with {chunks} chunks")
+        
         start_time = time.time()
+        memory_usage = []
         
-        # Generate and write chunks
-        for i in tqdm(range(chunks_needed), desc=f"Generating {target_size_gb}GB Parquet"):
-            chunk = self.generate_chunk()
-            if i == 0:
-                chunk.to_parquet(output_file, index=False)
-            else:
-                chunk.to_parquet(output_file, append=True, index=False)
+        # Create schema
+        schema = pa.Schema.from_pandas(self._generate_chunk(0, 1))
+        
+        with tqdm(total=chunks, desc=f"Generating {target_size_gb}GB Parquet") as pbar:
+            for i in range(chunks):
+                chunk_start = i * self.chunk_size
+                df_chunk = self._generate_chunk(chunk_start, self.chunk_size)
+                
+                # Convert to Arrow table
+                table = pa.Table.from_pandas(df_chunk, schema=schema)
+                
+                # Write chunk to Parquet
+                pq.write_table(table, output_file, append=i > 0)
+                
+                # Memory management
+                del df_chunk, table
+                gc.collect()
+                
+                # Record memory usage
+                memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
+                
+                pbar.update(1)
         
         end_time = time.time()
-        logger.info(f"Parquet generation completed in {end_time - start_time:.2f} seconds")
+        duration = end_time - start_time
+        avg_memory = sum(memory_usage) / len(memory_usage)
+        
+        logger.info(f"Parquet generation completed in {duration:.2f} seconds")
+        logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
         return output_file
 
-    def generate_orc(self, scale_factor):
+    def generate_orc(self, target_size_gb: float, scale_factor: str) -> str:
         """Generate ORC file of specified size."""
-        target_size_gb = scale_factor
-        chunks_needed = self.estimate_chunks_needed(target_size_gb)
-        output_file = os.path.join(self.output_dir, f'sf{scale_factor}', f'data_{scale_factor}gb.orc')
+        output_file = os.path.join(self.output_dir, f"sf{scale_factor}", f"data_{target_size_gb}gb.orc")
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
-        logger.info(f"Generating {target_size_gb}GB ORC file...")
+        chunks = self._estimate_chunks(target_size_gb)
+        logger.info(f"Generating {target_size_gb}GB ORC file with {chunks} chunks")
+        
         start_time = time.time()
+        memory_usage = []
         
-        # Generate and write chunks
-        for i in tqdm(range(chunks_needed), desc=f"Generating {target_size_gb}GB ORC"):
-            chunk = self.generate_chunk()
-            if i == 0:
-                table = pa.Table.from_pandas(chunk)
-                orc.write_table(table, output_file)
-            else:
-                table = pa.Table.from_pandas(chunk)
-                orc.write_table(table, output_file, append=True)
+        # Define ORC schema
+        schema = "struct<id:bigint,name:string,age:int,salary:double,department:string,hire_date:string,is_active:boolean,performance_score:float,years_of_service:int,bonus:double>"
+        
+        with tqdm(total=chunks, desc=f"Generating {target_size_gb}GB ORC") as pbar:
+            for i in range(chunks):
+                chunk_start = i * self.chunk_size
+                df_chunk = self._generate_chunk(chunk_start, self.chunk_size)
+                
+                # Convert DataFrame to list of dictionaries for ORC
+                records = df_chunk.to_dict('records')
+                
+                # Write chunk to ORC
+                with pyorc.Writer(output_file, schema, stripe_size=64*1024*1024) as writer:
+                    writer.writerows(records)
+                
+                # Memory management
+                del df_chunk, records
+                gc.collect()
+                
+                # Record memory usage
+                memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
+                
+                pbar.update(1)
         
         end_time = time.time()
-        logger.info(f"ORC generation completed in {end_time - start_time:.2f} seconds")
+        duration = end_time - start_time
+        avg_memory = sum(memory_usage) / len(memory_usage)
+        
+        logger.info(f"ORC generation completed in {duration:.2f} seconds")
+        logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
         return output_file
 
-    def generate_all_formats(self):
-        """Generate all formats for all scale factors."""
-        formats = {
-            'csv': self.generate_csv,
-            'txt': self.generate_txt,
-            'parquet': self.generate_parquet,
-            'orc': self.generate_orc
-        }
-        
-        results = {}
-        for sf in self.scale_factors:
-            results[f'sf{sf}'] = {}
-            for fmt, generator in formats.items():
-                try:
-                    output_file = generator(sf)
-                    results[f'sf{sf}'][fmt] = output_file
-                    logger.info(f"Successfully generated {fmt.upper()} file for scale factor {sf}GB")
-                except Exception as e:
-                    logger.error(f"Error generating {fmt.upper()} file for scale factor {sf}GB: {str(e)}")
-                    results[f'sf{sf}'][fmt] = None
-        
-        return results
+    def generate_all_formats(self, scale_factors: List[str] = ["1", "10", "100"]):
+        """Generate all formats for specified scale factors."""
+        for sf in scale_factors:
+            target_size = float(sf)
+            logger.info(f"Generating data for scale factor {sf}GB")
+            
+            # Generate each format
+            self.generate_csv(target_size, sf)
+            self.generate_txt(target_size, sf)
+            self.generate_parquet(target_size, sf)
+            self.generate_orc(target_size, sf)
+            
+            logger.info(f"Completed generation for scale factor {sf}GB")
 
 def main():
     # Get available memory
@@ -173,11 +281,11 @@ def main():
     
     # Generate data
     logger.info("Starting data generation...")
-    results = generator.generate_all_formats()
+    generator.generate_all_formats()
     
     # Print summary
     logger.info("\nData Generation Summary:")
-    for sf, formats in results.items():
+    for sf, formats in generator.generate_all_formats().items():
         logger.info(f"\nScale Factor: {sf}")
         for fmt, file_path in formats.items():
             if file_path:
