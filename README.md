@@ -61,21 +61,33 @@ The solution consists of two main components:
    cd dremio-benchmark
    ```
 
-2. Create and activate a virtual environment:
+2. Create and activate a virtual environment with Python 3.10 64-bit:
    ```powershell
+   # Make sure you're using Python 3.10 64-bit
+   python -c "import platform; print(platform.architecture())"  # Should show ('64bit', 'WindowsPE')
+   
+   # Create virtual environment
    python -m venv venv
    .\venv\Scripts\Activate.ps1
    ```
 
-3. Update pip and install prerequisite packages:
+3. Update pip and install build dependencies:
    ```powershell
    python -m pip install --upgrade pip
    pip install --upgrade setuptools wheel
-   pip install --upgrade cython numpy
+   pip install --upgrade cython
    ```
 
-4. Install project dependencies:
+4. Install core dependencies with specific versions:
    ```powershell
+   # Install numpy first (required for other packages)
+   pip install numpy==1.23.5
+   
+   # Install pandas and pyarrow
+   pip install pandas==1.5.3
+   pip install pyarrow==12.0.1
+   
+   # Install remaining dependencies
    pip install -r requirements.txt
    ```
 
@@ -89,35 +101,42 @@ The solution consists of two main components:
 
 ### Installation Notes
 
-- The prerequisite packages (setuptools, wheel, cython, numpy) are required for building some of the dependencies
-- Required package versions:
+- **Python Version**: This project requires Python 3.10 64-bit
+- **System Requirements**:
+  - Windows 10/11 64-bit
+  - Minimum 2GB available RAM
+  - Minimum 10GB free disk space
+  - Visual C++ Build Tools (required for some packages)
+
+- **Build Dependencies**:
+  - setuptools>=65.5.1
+  - wheel>=0.38.4
+  - cython>=0.29.36
+
+- **Core Package Versions**:
   - pandas==1.5.3
   - numpy==1.23.5
   - pyarrow==12.0.1
   - pyorc==1.7.0
-  - requests==2.31.0
-  - python-dotenv==1.0.0
-  - tqdm==4.65.0
-  - psutil==5.9.5
-  - loguru==0.7.2
 
-- If you encounter any installation issues, try:
-  ```powershell
-  pip install --upgrade pip setuptools wheel
-  pip install --upgrade cython numpy
-  pip install -r requirements.txt
-  ```
-
-- For Windows users:
-  - Install Visual C++ Build Tools if not already installed
-  - If you encounter build errors, try installing the pre-built wheels:
+- **Troubleshooting**:
+  - If you encounter build errors:
     ```powershell
+    # Install Visual C++ Build Tools first
+    # Then try installing pre-built wheels:
     pip install --only-binary :all: numpy==1.23.5
     pip install --only-binary :all: pandas==1.5.3
     ```
+  - For memory issues:
+    ```powershell
+    # Set environment variable for larger memory allocation
+    $env:PYTHONMALLOC = "debug"
+    ```
 
-- The scripts will automatically check for compatible package versions at startup
-- If version mismatches are detected, the scripts will provide instructions for installing the correct versions
+- **Performance Optimization**:
+  - The scripts will automatically optimize for 64-bit systems
+  - Memory management is configured for 64-bit operations
+  - Native readers are enabled for Parquet and ORC files
 
 ## Configuration
 
