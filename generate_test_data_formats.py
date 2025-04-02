@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 import numpy as np
 import pyarrow as pa
@@ -13,6 +14,36 @@ import pyorc
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import gc
+import pkg_resources
+
+def check_version_compatibility():
+    """Check if installed package versions are compatible."""
+    required_versions = {
+        'pandas': '1.5.3',
+        'numpy': '1.23.5',
+        'pyarrow': '12.0.1',
+        'pyorc': '1.7.0'
+    }
+    
+    incompatible_packages = []
+    for package, required_version in required_versions.items():
+        try:
+            installed_version = pkg_resources.get_distribution(package).version
+            if installed_version != required_version:
+                incompatible_packages.append(f"{package} (required: {required_version}, installed: {installed_version})")
+        except pkg_resources.DistributionNotFound:
+            incompatible_packages.append(f"{package} (not installed)")
+    
+    if incompatible_packages:
+        logger.error("Incompatible package versions detected:")
+        for package in incompatible_packages:
+            logger.error(f"- {package}")
+        logger.error("\nPlease install the correct versions using:")
+        logger.error("pip install pandas==1.5.3 numpy==1.23.5 pyarrow==12.0.1 pyorc==1.7.0")
+        sys.exit(1)
+
+# Check version compatibility before proceeding
+check_version_compatibility()
 
 class DataGenerator:
     def __init__(self, output_dir: str = "test_data"):
@@ -43,6 +74,126 @@ class DataGenerator:
             level="INFO",
             format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
         )
+        
+        # System resource checks
+        self._check_system_resources()
+        
+        # Initialize performance metrics
+        self.performance_metrics = {
+            'memory_usage': [],
+            'generation_times': [],
+            'file_sizes': []
+        }
+
+    def _check_system_resources(self):
+        """Check system resources and set optimal parameters."""
+        try:
+            # Check available memory
+            self.available_memory = psutil.virtual_memory().available
+            self.min_required_memory = 2 * 1024 * 1024 * 1024  # 2GB minimum
+            
+            if self.available_memory < self.min_required_memory:
+                raise RuntimeError(f"Insufficient memory. Available: {self.available_memory/1024/1024/1024:.2f}GB, Required: 2GB")
+            
+            # Check disk space
+            disk = psutil.disk_usage(self.output_dir)
+            if disk.free < 10 * 1024 * 1024 * 1024:  # 10GB minimum
+                raise RuntimeError(f"Insufficient disk space. Available: {disk.free/1024/1024/1024:.2f}GB, Required: 10GB")
+            
+            # Adjust chunk size based on available memory
+            max_chunk_size = int(self.available_memory * 0.1 / 1024 / 1024)  # Use 10% of available memory
+            self.chunk_size = min(self.chunk_size, max_chunk_size)
+            
+            logger.info(f"System resources checked. Using chunk size: {self.chunk_size}")
+            
+        except Exception as e:
+            logger.error(f"System resource check failed: {str(e)}")
+            raise
+
+    def _optimize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Optimize DataFrame memory usage."""
+        try:
+            # Optimize numeric columns
+            for col in df.select_dtypes(include=['int64']).columns:
+                if df[col].min() >= np.iinfo(np.int32).min and df[col].max() <= np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
+                elif df[col].min() >= np.iinfo(np.int16).min and df[col].max() <= np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif df[col].min() >= np.iinfo(np.int8).min and df[col].max() <= np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+            
+            for col in df.select_dtypes(include=['float64']).columns:
+                if df[col].dtype == np.float64:
+                    df[col] = df[col].astype(np.float32)
+            
+            # Optimize string columns
+            for col in df.select_dtypes(include=['object']).columns:
+                if df[col].nunique() / len(df) < 0.5:  # If less than 50% unique values
+                    df[col] = df[col].astype('category')
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error optimizing DataFrame: {str(e)}")
+            return df
+
+    def _generate_chunk(self, start_idx: int, chunk_size: int) -> pd.DataFrame:
+        """Generate a chunk of random data with memory optimization."""
+        try:
+            # Pre-allocate arrays for better memory efficiency
+            data = {
+                'id': np.arange(start_idx, start_idx + chunk_size, dtype=np.int64),
+                'name': [f'Employee_{i}' for i in range(start_idx, start_idx + chunk_size)],
+                'age': np.random.randint(22, 65, chunk_size, dtype=np.int32),
+                'salary': np.random.uniform(30000, 150000, chunk_size).astype(np.float64),
+                'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing', 'Sales'], chunk_size),
+                'hire_date': pd.date_range(start='2020-01-01', periods=chunk_size, freq='D').strftime('%Y-%m-%d'),
+                'is_active': np.random.choice([True, False], chunk_size),
+                'performance_score': np.random.uniform(0, 100, chunk_size).astype(np.float32),
+                'years_of_service': np.random.randint(0, 20, chunk_size, dtype=np.int32),
+                'bonus': np.random.uniform(0, 20000, chunk_size).astype(np.float64)
+            }
+            
+            # Create DataFrame with optimized memory usage
+            df = pd.DataFrame(data, columns=self.columns.keys())
+            df = self._optimize_dataframe(df)
+            
+            # Verify memory usage
+            chunk_memory = df.memory_usage(deep=True).sum()
+            if chunk_memory > self.available_memory * 0.5:  # If chunk uses more than 50% of available memory
+                raise MemoryError(f"Chunk size too large. Memory usage: {chunk_memory/1024/1024:.2f}MB")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error generating chunk: {str(e)}")
+            raise
+
+    def _cleanup_memory(self):
+        """Clean up memory and force garbage collection."""
+        gc.collect()
+        current_memory = psutil.Process().memory_info().rss
+        if current_memory > self.available_memory * 0.8:  # If using more than 80% of available memory
+            logger.warning("High memory usage detected, forcing cleanup")
+            gc.collect(2)  # Force garbage collection with generation 2 objects
+
+    def _record_performance_metrics(self, file_size: int, generation_time: float):
+        """Record performance metrics."""
+        self.performance_metrics['file_sizes'].append(file_size)
+        self.performance_metrics['generation_times'].append(generation_time)
+        self.performance_metrics['memory_usage'].append(psutil.Process().memory_info().rss / 1024 / 1024)
+
+    def _print_performance_summary(self):
+        """Print performance summary."""
+        if self.performance_metrics['file_sizes']:
+            avg_file_size = sum(self.performance_metrics['file_sizes']) / len(self.performance_metrics['file_sizes'])
+            avg_generation_time = sum(self.performance_metrics['generation_times']) / len(self.performance_metrics['generation_times'])
+            avg_memory_usage = sum(self.performance_metrics['memory_usage']) / len(self.performance_metrics['memory_usage'])
+            
+            logger.info("\nPerformance Summary:")
+            logger.info(f"Average file size: {avg_file_size/1024/1024/1024:.2f}GB")
+            logger.info(f"Average generation time: {avg_generation_time:.2f} seconds")
+            logger.info(f"Average memory usage: {avg_memory_usage:.2f}MB")
 
     def _estimate_chunks(self, target_size_gb: float) -> int:
         """Estimate number of chunks needed based on target size."""
@@ -74,21 +225,6 @@ class DataGenerator:
         
         return max(1, chunks_needed)
 
-    def _generate_chunk(self, start_idx: int, chunk_size: int) -> pd.DataFrame:
-        """Generate a chunk of random data."""
-        return pd.DataFrame({
-            'id': np.arange(start_idx, start_idx + chunk_size, dtype=np.int64),
-            'name': [f'Employee_{i}' for i in range(start_idx, start_idx + chunk_size)],
-            'age': np.random.randint(22, 65, chunk_size, dtype=np.int32),
-            'salary': np.random.uniform(30000, 150000, chunk_size).astype(np.float64),
-            'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing', 'Sales'], chunk_size),
-            'hire_date': pd.date_range(start='2020-01-01', periods=chunk_size, freq='D').strftime('%Y-%m-%d'),
-            'is_active': np.random.choice([True, False], chunk_size),
-            'performance_score': np.random.uniform(0, 100, chunk_size).astype(np.float32),
-            'years_of_service': np.random.randint(0, 20, chunk_size, dtype=np.int32),
-            'bonus': np.random.uniform(0, 20000, chunk_size).astype(np.float64)
-        })
-
     def generate_csv(self, target_size_gb: float, scale_factor: str) -> str:
         """Generate CSV file of specified size."""
         output_file = os.path.join(self.output_dir, f"sf{scale_factor}", f"data_{target_size_gb}gb.csv")
@@ -112,7 +248,7 @@ class DataGenerator:
                 
                 # Memory management
                 del df_chunk
-                gc.collect()
+                self._cleanup_memory()
                 
                 # Record memory usage
                 memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
@@ -125,6 +261,8 @@ class DataGenerator:
         
         logger.info(f"CSV generation completed in {duration:.2f} seconds")
         logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
+        self._record_performance_metrics(os.path.getsize(output_file), duration)
         
         return output_file
 
@@ -151,7 +289,7 @@ class DataGenerator:
                 
                 # Memory management
                 del df_chunk
-                gc.collect()
+                self._cleanup_memory()
                 
                 # Record memory usage
                 memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
@@ -164,6 +302,8 @@ class DataGenerator:
         
         logger.info(f"TXT generation completed in {duration:.2f} seconds")
         logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
+        self._record_performance_metrics(os.path.getsize(output_file), duration)
         
         return output_file
 
@@ -194,7 +334,7 @@ class DataGenerator:
                 
                 # Memory management
                 del df_chunk, table
-                gc.collect()
+                self._cleanup_memory()
                 
                 # Record memory usage
                 memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
@@ -207,6 +347,8 @@ class DataGenerator:
         
         logger.info(f"Parquet generation completed in {duration:.2f} seconds")
         logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
+        self._record_performance_metrics(os.path.getsize(output_file), duration)
         
         return output_file
 
@@ -238,7 +380,7 @@ class DataGenerator:
                 
                 # Memory management
                 del df_chunk, records
-                gc.collect()
+                self._cleanup_memory()
                 
                 # Record memory usage
                 memory_usage.append(psutil.Process().memory_info().rss / 1024 / 1024)
@@ -251,6 +393,8 @@ class DataGenerator:
         
         logger.info(f"ORC generation completed in {duration:.2f} seconds")
         logger.info(f"Average memory usage: {avg_memory:.2f} MB")
+        
+        self._record_performance_metrics(os.path.getsize(output_file), duration)
         
         return output_file
 
@@ -267,6 +411,18 @@ class DataGenerator:
             self.generate_orc(target_size, sf)
             
             logger.info(f"Completed generation for scale factor {sf}GB")
+
+    def _print_performance_summary(self):
+        """Print performance summary."""
+        if self.performance_metrics['file_sizes']:
+            avg_file_size = sum(self.performance_metrics['file_sizes']) / len(self.performance_metrics['file_sizes'])
+            avg_generation_time = sum(self.performance_metrics['generation_times']) / len(self.performance_metrics['generation_times'])
+            avg_memory_usage = sum(self.performance_metrics['memory_usage']) / len(self.performance_metrics['memory_usage'])
+            
+            logger.info("\nPerformance Summary:")
+            logger.info(f"Average file size: {avg_file_size/1024/1024/1024:.2f}GB")
+            logger.info(f"Average generation time: {avg_generation_time:.2f} seconds")
+            logger.info(f"Average memory usage: {avg_memory_usage:.2f}MB")
 
 def main():
     # Get available memory
@@ -293,6 +449,9 @@ def main():
                 logger.info(f"{fmt.upper()}: {file_path} ({size_gb:.2f}GB)")
             else:
                 logger.warning(f"{fmt.upper()}: Failed to generate")
+
+    # Print performance summary
+    generator._print_performance_summary()
 
 if __name__ == "__main__":
     main() 

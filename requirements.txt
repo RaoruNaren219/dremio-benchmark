@@ -4,10 +4,10 @@ pandas==1.5.3
 numpy==1.23.5
 pyarrow==12.0.1
 tabulate==0.9.0
-tqdm==4.66.1
-psutil==5.9.7
+tqdm==4.65.0
+psutil==5.9.5
 colorama==0.4.6
 loguru==0.7.2
-pyorc==0.8.0
+pyorc==1.7.0
 streamlit==1.29.0
 plotly==5.18.0 

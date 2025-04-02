@@ -1,7 +1,7 @@
 import os
+import sys
 import time
 import argparse
-import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 from loguru import logger
@@ -14,276 +14,297 @@ import hashlib
 from metrics_collector import MetricsCollector
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
+import pyorc
+import gc
+import pkg_resources
+
+def check_version_compatibility():
+    """Check if installed package versions are compatible."""
+    required_versions = {
+        'pandas': '1.5.3',
+        'numpy': '1.23.5',
+        'pyarrow': '12.0.1',
+        'pyorc': '1.7.0',
+        'requests': '2.31.0',
+        'python-dotenv': '1.0.0'
+    }
+    
+    incompatible_packages = []
+    for package, required_version in required_versions.items():
+        try:
+            installed_version = pkg_resources.get_distribution(package).version
+            if installed_version != required_version:
+                incompatible_packages.append(f"{package} (required: {required_version}, installed: {installed_version})")
+        except pkg_resources.DistributionNotFound:
+            incompatible_packages.append(f"{package} (not installed)")
+    
+    if incompatible_packages:
+        logger.error("Incompatible package versions detected:")
+        for package in incompatible_packages:
+            logger.error(f"- {package}")
+        logger.error("\nPlease install the correct versions using:")
+        logger.error("pip install pandas==1.5.3 numpy==1.23.5 pyarrow==12.0.1 pyorc==1.7.0 requests==2.31.0 python-dotenv==1.0.0")
+        sys.exit(1)
+
+# Check version compatibility before proceeding
+check_version_compatibility()
 
 class DremioIngester:
-    def __init__(self, dremio_url: str, username: str, password: str):
-        """
-        Initialize the Dremio ingester.
-        
-        Args:
-            dremio_url (str): Dremio server URL
-            username (str): Dremio username
-            password (str): Dremio password
-        """
+    def __init__(self, dremio_url: str, username: str, password: str, space_name: str = "test_data"):
+        """Initialize the Dremio ingester with connection details."""
         self.dremio_url = dremio_url.rstrip('/')
         self.username = username
         self.password = password
+        self.space_name = space_name
         self.token = None
         self.headers = None
         self.metrics_collector = MetricsCollector()
-        self.authenticate()
-
-    def authenticate(self) -> None:
-        """Authenticate with Dremio server."""
-        auth_url = f"{self.dremio_url}/apiv2/login"
-        auth_data = {
-            "userName": self.username,
-            "password": self.password
+        self.supported_formats = {
+            'CSV': {'extensions': ['.csv'], 'mime_type': 'text/csv'},
+            'TXT': {'extensions': ['.txt'], 'mime_type': 'text/plain'},
+            'PARQUET': {'extensions': ['.parquet'], 'mime_type': 'application/x-parquet'},
+            'ORC': {'extensions': ['.orc'], 'mime_type': 'application/x-orc'}
         }
         
+        # Configure logging
+        logger.add(
+            "data_ingestion.log",
+            rotation="1 day",
+            retention="7 days",
+            level="INFO",
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}"
+        )
+
+    def authenticate(self) -> bool:
+        """Authenticate with Dremio and get token."""
         try:
-            response = requests.post(auth_url, json=auth_data, timeout=30)
+            auth_url = f"{self.dremio_url}/apiv2/login"
+            response = requests.post(
+                auth_url,
+                json={"userName": self.username, "password": self.password}
+            )
             response.raise_for_status()
-            self.token = response.json()['token']
+            self.token = response.json()["token"]
             self.headers = {
                 'Authorization': f'_dremio{self.token}',
                 'Content-Type': 'application/json'
             }
             logger.info("Successfully authenticated with Dremio")
-        except requests.exceptions.Timeout:
-            logger.error("Authentication timed out")
-            raise
-        except requests.exceptions.RequestException as e:
+            return True
+        except Exception as e:
             logger.error(f"Authentication failed: {str(e)}")
-            raise
-        except KeyError:
-            logger.error("Invalid response format from Dremio server")
-            raise
+            return False
 
-    def create_space(self, space_name: str) -> None:
-        """
-        Create a new space in Dremio if it doesn't exist.
-        
-        Args:
-            space_name (str): Name of the space to create
-        """
+    def create_space(self) -> bool:
+        """Create a space in Dremio if it doesn't exist."""
         try:
+            catalog_url = f"{self.dremio_url}/api/v3/catalog"
+            
             # Check if space exists
-            response = requests.get(
-                f"{self.dremio_url}/api/v3/catalog",
-                headers=self.headers,
-                timeout=30
-            )
+            response = requests.get(catalog_url, headers=self.headers)
             response.raise_for_status()
-            spaces = response.json().get('data', [])
+            spaces = response.json().get("data", [])
             
-            if not any(space['path'][0] == space_name for space in spaces):
-                # Create new space
-                create_data = {
+            if not any(space["name"] == self.space_name for space in spaces):
+                # Create space
+                create_url = f"{self.dremio_url}/api/v3/catalog"
+                payload = {
                     "entityType": "space",
-                    "name": space_name
+                    "name": self.space_name,
+                    "description": "Space for test data ingestion"
                 }
-                response = requests.post(
-                    f"{self.dremio_url}/api/v3/catalog",
-                    headers=self.headers,
-                    json=create_data,
-                    timeout=30
-                )
+                response = requests.post(create_url, headers=self.headers, json=payload)
                 response.raise_for_status()
-                logger.info(f"Created new space: {space_name}")
+                logger.info(f"Created space: {self.space_name}")
             else:
-                logger.info(f"Space {space_name} already exists")
-        except requests.exceptions.Timeout:
-            logger.error("Space creation timed out")
-            raise
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to create space: {str(e)}")
-            raise
-
-    def validate_file(self, file_path: str, file_format: str) -> bool:
-        """
-        Validate file before ingestion.
-        
-        Args:
-            file_path (str): Path to the file
-            file_format (str): Format of the file
+                logger.info(f"Space {self.space_name} already exists")
             
-        Returns:
-            bool: True if file is valid, False otherwise
-        """
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create space: {str(e)}")
+            return False
+
+    def _validate_file_format(self, file_path: str) -> Optional[str]:
+        """Validate and return the file format type."""
         try:
-            file_path = Path(file_path)
-            if not file_path.exists():
-                logger.error(f"File not found: {file_path}")
-                return False
-                
-            if not file_path.is_file():
-                logger.error(f"Path is not a file: {file_path}")
-                return False
-                
-            # Check file size
-            file_size = file_path.stat().st_size
-            if file_size == 0:
-                logger.error(f"File is empty: {file_path}")
-                return False
-                
-            # Check available memory (need at least 2x file size)
-            available_memory = psutil.virtual_memory().available
-            if available_memory < file_size * 2:
-                logger.error(f"Insufficient memory for file {file_path}")
-                return False
-                
-            # Basic format validation
-            if file_format.lower() == 'csv':
-                # Check if file has header and data
+            file_ext = Path(file_path).suffix.lower()
+            for format_type, format_info in self.supported_formats.items():
+                if file_ext in format_info['extensions']:
+                    return format_type
+            logger.error(f"Unsupported file format: {file_ext}")
+            return None
+        except Exception as e:
+            logger.error(f"Error validating file format: {str(e)}")
+            return None
+
+    def _validate_file_integrity(self, file_path: str, format_type: str) -> bool:
+        """Validate file integrity based on format type."""
+        try:
+            if format_type == 'CSV':
+                # Validate CSV structure
                 with open(file_path, 'r') as f:
                     header = f.readline().strip()
-                    data = f.readline().strip()
-                    if not header or not data:
-                        logger.error(f"Invalid CSV format: {file_path}")
+                    if not header:
+                        logger.error("CSV file has no header")
                         return False
-                        
-            elif file_format.lower() in ['parquet', 'orc']:
-                # These formats will be validated during ingestion
-                pass
-                
+                    data = f.readline().strip()
+                    if not data:
+                        logger.error("CSV file has no data")
+                        return False
+                    # Verify column count matches header
+                    header_cols = len(header.split(','))
+                    data_cols = len(data.split(','))
+                    if header_cols != data_cols:
+                        logger.error(f"CSV column count mismatch: header={header_cols}, data={data_cols}")
+                        return False
+
+            elif format_type == 'PARQUET':
+                # Validate Parquet file
+                try:
+                    pq.read_table(file_path)
+                except Exception as e:
+                    logger.error(f"Invalid Parquet file: {str(e)}")
+                    return False
+
+            elif format_type == 'ORC':
+                # Validate ORC file
+                try:
+                    with pyorc.Reader(file_path) as reader:
+                        if reader.num_rows == 0:
+                            logger.error("ORC file has no rows")
+                            return False
+                except Exception as e:
+                    logger.error(f"Invalid ORC file: {str(e)}")
+                    return False
+
             return True
-            
+
         except Exception as e:
-            logger.error(f"File validation failed: {str(e)}")
+            logger.error(f"Error validating file integrity: {str(e)}")
             return False
 
-    def ingest_file(self, file_path: str, space_name: str, table_name: str, file_format: str) -> bool:
-        """
-        Ingest a file into Dremio.
-        
-        Args:
-            file_path (str): Path to the file to ingest
-            space_name (str): Name of the space to create table in
-            table_name (str): Name of the table to create
-            file_format (str): Format of the file (csv, parquet, orc)
-            
-        Returns:
-            bool: True if ingestion was successful, False otherwise
-        """
+    def ingest_file(self, file_path: str, format_type: str) -> bool:
+        """Ingest a file into Dremio with improved validation."""
         try:
-            # Validate file before ingestion
-            if not self.validate_file(file_path, file_format):
+            if not self.token:
+                if not self.authenticate():
+                    return False
+
+            # Validate file format
+            detected_format = self._validate_file_format(file_path)
+            if not detected_format or detected_format != format_type:
+                logger.error(f"File format mismatch: expected {format_type}, detected {detected_format}")
                 return False
-                
-            # Prepare the ingestion request
-            ingestion_data = {
+
+            # Validate file integrity
+            if not self._validate_file_integrity(file_path, format_type):
+                return False
+
+            headers = {"Authorization": f"_dremio{self.token}"}
+            file_name = Path(file_path).name
+            table_name = Path(file_path).stem
+
+            # Prepare ingestion payload with format-specific settings
+            payload = {
                 "entityType": "dataset",
-                "path": [space_name, table_name],
-                "type": "PHYSICAL_DATASET",
-                "format": file_format.upper(),
+                "name": table_name,
+                "path": [self.space_name, table_name],
+                "type": format_type.upper(),
+                "format": {
+                    "type": format_type.lower(),
+                    "extractHeader": format_type in ['CSV', 'TXT'],
+                    "trimValues": True,
+                    "hasHeader": format_type in ['CSV', 'TXT'],
+                    "skipFirstLine": False,
+                    "extractFieldNames": True
+                },
                 "location": file_path
             }
-            
-            # Start ingestion
-            logger.info(f"Starting ingestion of {file_path} into {space_name}.{table_name}")
-            start_time = time.time()
-            
-            response = requests.post(
-                f"{self.dremio_url}/api/v3/catalog",
-                headers=self.headers,
-                json=ingestion_data,
-                timeout=30
-            )
+
+            # Add format-specific settings
+            if format_type == 'PARQUET':
+                payload["format"]["parquet"] = {
+                    "autoCorrectCorruptDates": True,
+                    "readInt96AsTimestamp": True
+                }
+            elif format_type == 'ORC':
+                payload["format"]["orc"] = {
+                    "autoCorrectCorruptDates": True
+                }
+
+            # Create dataset
+            create_url = f"{self.dremio_url}/api/v3/catalog"
+            response = requests.post(create_url, headers=headers, json=payload)
             response.raise_for_status()
             
-            # Wait for ingestion to complete
-            job_id = response.json().get('id')
-            self._wait_for_job_completion(job_id)
-            
-            end_time = time.time()
-            duration = end_time - start_time
-            
-            # Record metrics
-            file_size = Path(file_path).stat().st_size / (1024 * 1024 * 1024)  # Convert to GB
-            self.metrics_collector.record_ingestion_metrics(
-                file_format=file_format,
-                file_size=file_size,
-                ingestion_time=duration,
-                success=True,
-                data_lake="dremio",
-                additional_metrics={
-                    "space_name": space_name,
-                    "table_name": table_name,
-                    "job_id": job_id
-                }
-            )
-            
-            logger.info(f"Successfully ingested {file_path} in {duration:.2f} seconds")
-            return True
-            
-        except requests.exceptions.Timeout:
-            logger.error(f"Ingestion timed out for {file_path}")
-            self._record_failed_ingestion(file_path, file_format, time.time() - start_time)
-            return False
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to ingest {file_path}: {str(e)}")
-            self._record_failed_ingestion(file_path, file_format, time.time() - start_time)
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error during ingestion: {str(e)}")
-            self._record_failed_ingestion(file_path, file_format, time.time() - start_time)
-            return False
+            # Start refresh job with timeout
+            job_url = f"{self.dremio_url}/api/v3/job"
+            job_payload = {
+                "sql": f"REFRESH DATASET {self.space_name}.{table_name}"
+            }
+            response = requests.post(job_url, headers=headers, json=job_payload)
+            response.raise_for_status()
+            job_id = response.json()["id"]
 
-    def _wait_for_job_completion(self, job_id: str, timeout: int = 3600) -> bool:
-        """
-        Wait for a job to complete.
-        
-        Args:
-            job_id (str): ID of the job to wait for
-            timeout (int): Maximum time to wait in seconds
-            
-        Returns:
-            bool: True if job completed successfully, False otherwise
-        """
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            try:
-                response = requests.get(
-                    f"{self.dremio_url}/api/v3/job/{job_id}",
-                    headers=self.headers,
-                    timeout=30
-                )
+            # Monitor job status with timeout
+            start_time = time.time()
+            timeout = 3600  # 1 hour timeout
+            while True:
+                if time.time() - start_time > timeout:
+                    logger.error(f"Job timed out after {timeout} seconds")
+                    return False
+
+                status_url = f"{self.dremio_url}/api/v3/job/{job_id}"
+                response = requests.get(status_url, headers=headers)
                 response.raise_for_status()
-                job_state = response.json().get('jobState')
+                job_state = response.json()["jobState"]
                 
-                if job_state == 'COMPLETED':
+                if job_state == "COMPLETED":
+                    logger.info(f"Successfully ingested {file_name}")
                     return True
-                elif job_state in ['FAILED', 'CANCELED']:
-                    raise Exception(f"Job failed with state: {job_state}")
+                elif job_state in ["FAILED", "CANCELED"]:
+                    logger.error(f"Job failed for {file_name}")
+                    return False
                 
-                time.sleep(5)  # Wait 5 seconds before checking again
-                
-            except requests.exceptions.Timeout:
-                logger.error("Job status check timed out")
-                raise
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Error checking job status: {str(e)}")
-                raise
-        
-        raise TimeoutError("Job timed out")
+                time.sleep(2)
 
-    def _record_failed_ingestion(self, file_path: str, file_format: str, duration: float) -> None:
-        """Record metrics for a failed ingestion."""
-        try:
-            file_size = Path(file_path).stat().st_size / (1024 * 1024 * 1024)  # Convert to GB
-            self.metrics_collector.record_ingestion_metrics(
-                file_format=file_format,
-                file_size=file_size,
-                ingestion_time=duration,
-                success=False,
-                data_lake="dremio",
-                additional_metrics={
-                    "error": "Ingestion failed"
-                }
-            )
         except Exception as e:
-            logger.error(f"Failed to record metrics for failed ingestion: {str(e)}")
+            logger.error(f"Failed to ingest {file_path}: {str(e)}")
+            return False
+
+    def ingest_all_files(self, data_dir: str) -> Dict[str, List[str]]:
+        """Ingest all files from the data directory."""
+        results = {
+            "success": [],
+            "failed": []
+        }
+        
+        try:
+            # Create space if it doesn't exist
+            if not self.create_space():
+                return results
+
+            # Walk through the data directory
+            for root, _, files in os.walk(data_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    format_type = self._validate_file_format(file_path)
+                    
+                    if format_type:
+                        logger.info(f"Processing {file_path}")
+                        if self.ingest_file(file_path, format_type):
+                            results["success"].append(file_path)
+                        else:
+                            results["failed"].append(file_path)
+                    
+                    # Memory management
+                    gc.collect()
+
+        except Exception as e:
+            logger.error(f"Error during ingestion: {str(e)}")
+        
+        return results
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
@@ -376,36 +397,26 @@ def main() -> None:
         dremio_url = os.getenv('DREMIO_URL')
         username = os.getenv('DREMIO_USERNAME')
         password = os.getenv('DREMIO_PASSWORD')
+        space_name = args.space
+        data_dir = os.getenv("DATA_DIR", "test_data")
         
         # Initialize ingester
-        ingester = DremioIngester(dremio_url, username, password)
+        ingester = DremioIngester(dremio_url, username, password, space_name)
         
-        # Create space for test data
-        ingester.create_space(args.space)
-        
-        # Process selected sizes and formats
-        results = {}
-        for sf in args.sizes:
-            results[f'sf{sf}'] = {}
-            for fmt in args.formats:
-                file_path = os.path.join('test_data', f'sf{sf}', f'data_{sf}gb.{fmt}')
-                if os.path.exists(file_path):
-                    table_name = f'data_{sf}gb_{fmt}'
-                    if args.dry_run:
-                        results[f'sf{sf}'][fmt] = 'Would ingest'
-                    else:
-                        success = ingester.ingest_file(file_path, args.space, table_name, fmt)
-                        results[f'sf{sf}'][fmt] = 'Success' if success else 'Failed'
-                else:
-                    results[f'sf{sf}'][fmt] = 'File not found'
+        # Start ingestion
+        logger.info("Starting data ingestion...")
+        results = ingester.ingest_all_files(data_dir)
         
         # Print summary
         logger.info("\nIngestion Summary:")
-        for sf, formats in results.items():
-            logger.info(f"\nScale Factor: {sf}")
-            for fmt, status in formats.items():
-                logger.info(f"{fmt.upper()}: {status}")
-                
+        logger.info(f"Successfully ingested: {len(results['success'])} files")
+        logger.info(f"Failed to ingest: {len(results['failed'])} files")
+        
+        if results['failed']:
+            logger.info("\nFailed files:")
+            for file in results['failed']:
+                logger.info(f"- {file}")
+        
     except KeyboardInterrupt:
         logger.warning("Process interrupted by user")
         sys.exit(1)
