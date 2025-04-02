@@ -2,28 +2,25 @@
 pandas==1.5.3
 numpy==1.23.5
 pyarrow==12.0.1
-pyorc==1.7.0
+pyorc==0.10.0
 
 # HTTP and environment management
 requests==2.31.0
 python-dotenv==1.0.0
 
-# Progress and system monitoring
-tqdm==4.65.0
+# System monitoring and progress tracking
 psutil==5.9.5
+tqdm==4.65.0
 
-# Logging
+# Logging and output formatting
 loguru==0.7.2
-
-# Build dependencies (required for compilation)
-setuptools>=65.5.1
-wheel>=0.38.4
-cython>=0.29.36
-
-# Optional: For better performance on Windows
-pywin32>=305; sys_platform == 'win32'
-
 tabulate==0.9.0
 colorama==0.4.6
+
+# Build dependencies
+wheel>=0.38.4
+setuptools>=65.5.1
+
+# Visualization
 streamlit==1.29.0
 plotly==5.18.0 
