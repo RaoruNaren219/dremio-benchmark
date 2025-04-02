@@ -17,7 +17,7 @@ import gc
 import pkg_resources
 
 def check_version_compatibility():
-    """Check if installed package versions are compatible."""
+    """Check if installed package versions match required versions."""
     required_versions = {
         'pandas': '1.5.3',
         'numpy': '1.23.5',
@@ -30,19 +30,19 @@ def check_version_compatibility():
         try:
             installed_version = pkg_resources.get_distribution(package).version
             if installed_version != required_version:
-                incompatible_packages.append(f"{package} (required: {required_version}, installed: {installed_version})")
+                incompatible_packages.append(f"{package}=={required_version} (installed: {installed_version})")
         except pkg_resources.DistributionNotFound:
-            incompatible_packages.append(f"{package} (not installed)")
+            incompatible_packages.append(f"{package}=={required_version} (not installed)")
     
     if incompatible_packages:
         logger.error("Incompatible package versions detected:")
         for package in incompatible_packages:
-            logger.error(f"- {package}")
+            logger.error(f"  - {package}")
         logger.error("\nPlease install the correct versions using:")
-        logger.error("pip install pandas==1.5.3 numpy==1.23.5 pyarrow==12.0.1 pyorc==1.7.0")
+        logger.error("pip install " + " ".join(incompatible_packages))
         sys.exit(1)
 
-# Check version compatibility before proceeding
+# Check version compatibility at startup
 check_version_compatibility()
 
 class DataGenerator:
@@ -86,9 +86,9 @@ class DataGenerator:
         }
 
     def _check_system_resources(self):
-        """Check system resources and set optimal parameters."""
+        """Check system resources and set optimal parameters for 64-bit system."""
         try:
-            # Check available memory
+            # Check available memory (64-bit system)
             self.available_memory = psutil.virtual_memory().available
             self.min_required_memory = 2 * 1024 * 1024 * 1024  # 2GB minimum
             
@@ -100,20 +100,24 @@ class DataGenerator:
             if disk.free < 10 * 1024 * 1024 * 1024:  # 10GB minimum
                 raise RuntimeError(f"Insufficient disk space. Available: {disk.free/1024/1024/1024:.2f}GB, Required: 10GB")
             
-            # Adjust chunk size based on available memory
-            max_chunk_size = int(self.available_memory * 0.1 / 1024 / 1024)  # Use 10% of available memory
+            # Adjust chunk size based on available memory (optimized for 64-bit)
+            max_chunk_size = int(self.available_memory * 0.2 / 1024 / 1024)  # Use 20% of available memory
             self.chunk_size = min(self.chunk_size, max_chunk_size)
             
-            logger.info(f"System resources checked. Using chunk size: {self.chunk_size}")
+            # Log system information
+            logger.info(f"System Information:")
+            logger.info(f"- Available Memory: {self.available_memory/1024/1024/1024:.2f}GB")
+            logger.info(f"- Available Disk Space: {disk.free/1024/1024/1024:.2f}GB")
+            logger.info(f"- Using chunk size: {self.chunk_size}")
             
         except Exception as e:
             logger.error(f"System resource check failed: {str(e)}")
             raise
 
     def _optimize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Optimize DataFrame memory usage."""
+        """Optimize DataFrame memory usage for 64-bit system."""
         try:
-            # Optimize numeric columns
+            # Optimize numeric columns with 64-bit considerations
             for col in df.select_dtypes(include=['int64']).columns:
                 if df[col].min() >= np.iinfo(np.int32).min and df[col].max() <= np.iinfo(np.int32).max:
                     df[col] = df[col].astype(np.int32)
@@ -122,9 +126,12 @@ class DataGenerator:
                 elif df[col].min() >= np.iinfo(np.int8).min and df[col].max() <= np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
             
+            # Keep float64 for precision in 64-bit system
             for col in df.select_dtypes(include=['float64']).columns:
                 if df[col].dtype == np.float64:
-                    df[col] = df[col].astype(np.float32)
+                    # Only convert to float32 if precision loss is acceptable
+                    if df[col].nunique() / len(df) < 0.1:  # If less than 10% unique values
+                        df[col] = df[col].astype(np.float32)
             
             # Optimize string columns
             for col in df.select_dtypes(include=['object']).columns:
@@ -170,12 +177,14 @@ class DataGenerator:
             raise
 
     def _cleanup_memory(self):
-        """Clean up memory and force garbage collection."""
+        """Clean up memory and force garbage collection for 64-bit system."""
         gc.collect()
         current_memory = psutil.Process().memory_info().rss
         if current_memory > self.available_memory * 0.8:  # If using more than 80% of available memory
-            logger.warning("High memory usage detected, forcing cleanup")
+            logger.warning(f"High memory usage detected: {current_memory/1024/1024/1024:.2f}GB")
             gc.collect(2)  # Force garbage collection with generation 2 objects
+            gc.collect(1)  # Also collect generation 1 objects
+            gc.collect(0)  # And generation 0 objects
 
     def _record_performance_metrics(self, file_size: int, generation_time: float):
         """Record performance metrics."""

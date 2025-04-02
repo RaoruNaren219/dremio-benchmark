@@ -20,14 +20,17 @@ import gc
 import pkg_resources
 
 def check_version_compatibility():
-    """Check if installed package versions are compatible."""
+    """Check if installed package versions match required versions."""
     required_versions = {
         'pandas': '1.5.3',
         'numpy': '1.23.5',
         'pyarrow': '12.0.1',
         'pyorc': '1.7.0',
         'requests': '2.31.0',
-        'python-dotenv': '1.0.0'
+        'python-dotenv': '1.0.0',
+        'tqdm': '4.65.0',
+        'psutil': '5.9.5',
+        'loguru': '0.7.2'
     }
     
     incompatible_packages = []
@@ -35,19 +38,19 @@ def check_version_compatibility():
         try:
             installed_version = pkg_resources.get_distribution(package).version
             if installed_version != required_version:
-                incompatible_packages.append(f"{package} (required: {required_version}, installed: {installed_version})")
+                incompatible_packages.append(f"{package}=={required_version} (installed: {installed_version})")
         except pkg_resources.DistributionNotFound:
-            incompatible_packages.append(f"{package} (not installed)")
+            incompatible_packages.append(f"{package}=={required_version} (not installed)")
     
     if incompatible_packages:
         logger.error("Incompatible package versions detected:")
         for package in incompatible_packages:
-            logger.error(f"- {package}")
+            logger.error(f"  - {package}")
         logger.error("\nPlease install the correct versions using:")
-        logger.error("pip install pandas==1.5.3 numpy==1.23.5 pyarrow==12.0.1 pyorc==1.7.0 requests==2.31.0 python-dotenv==1.0.0")
+        logger.error("pip install " + " ".join(incompatible_packages))
         sys.exit(1)
 
-# Check version compatibility before proceeding
+# Check version compatibility at startup
 check_version_compatibility()
 
 class DremioIngester:
@@ -185,7 +188,7 @@ class DremioIngester:
             return False
 
     def ingest_file(self, file_path: str, format_type: str) -> bool:
-        """Ingest a file into Dremio with improved validation."""
+        """Ingest a file into Dremio with improved validation and 64-bit optimization."""
         try:
             if not self.token:
                 if not self.authenticate():
@@ -205,6 +208,10 @@ class DremioIngester:
             file_name = Path(file_path).name
             table_name = Path(file_path).stem
 
+            # Get file size for memory management
+            file_size = os.path.getsize(file_path)
+            logger.info(f"Processing file: {file_name} ({file_size/1024/1024/1024:.2f}GB)")
+
             # Prepare ingestion payload with format-specific settings
             payload = {
                 "entityType": "dataset",
@@ -222,15 +229,17 @@ class DremioIngester:
                 "location": file_path
             }
 
-            # Add format-specific settings
+            # Add format-specific settings with 64-bit optimizations
             if format_type == 'PARQUET':
                 payload["format"]["parquet"] = {
                     "autoCorrectCorruptDates": True,
-                    "readInt96AsTimestamp": True
+                    "readInt96AsTimestamp": True,
+                    "useParquetNativeReader": True  # Use native reader for better performance
                 }
             elif format_type == 'ORC':
                 payload["format"]["orc"] = {
-                    "autoCorrectCorruptDates": True
+                    "autoCorrectCorruptDates": True,
+                    "useOrcNativeReader": True  # Use native reader for better performance
                 }
 
             # Create dataset
@@ -247,13 +256,21 @@ class DremioIngester:
             response.raise_for_status()
             job_id = response.json()["id"]
 
-            # Monitor job status with timeout
+            # Monitor job status with timeout and memory management
             start_time = time.time()
             timeout = 3600  # 1 hour timeout
             while True:
                 if time.time() - start_time > timeout:
                     logger.error(f"Job timed out after {timeout} seconds")
                     return False
+
+                # Check memory usage
+                current_memory = psutil.Process().memory_info().rss
+                if current_memory > psutil.virtual_memory().available * 0.8:
+                    logger.warning(f"High memory usage detected: {current_memory/1024/1024/1024:.2f}GB")
+                    gc.collect(2)
+                    gc.collect(1)
+                    gc.collect(0)
 
                 status_url = f"{self.dremio_url}/api/v3/job/{job_id}"
                 response = requests.get(status_url, headers=headers)
@@ -348,7 +365,7 @@ def parse_arguments() -> argparse.Namespace:
 
 def validate_environment() -> bool:
     """
-    Validate environment variables and system requirements.
+    Validate environment variables and system requirements for 64-bit system.
     
     Returns:
         bool: True if environment is valid, False otherwise
@@ -362,17 +379,24 @@ def validate_environment() -> bool:
             logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
             return False
             
-        # Check system memory
+        # Check system memory (64-bit)
         memory = psutil.virtual_memory()
         if memory.available < 2 * 1024 * 1024 * 1024:  # 2GB minimum
-            logger.error("Insufficient system memory")
+            logger.error(f"Insufficient system memory. Available: {memory.available/1024/1024/1024:.2f}GB, Required: 2GB")
             return False
             
         # Check disk space
         disk = psutil.disk_usage('/')
         if disk.free < 10 * 1024 * 1024 * 1024:  # 10GB minimum
-            logger.error("Insufficient disk space")
+            logger.error(f"Insufficient disk space. Available: {disk.free/1024/1024/1024:.2f}GB, Required: 10GB")
             return False
+            
+        # Log system information
+        logger.info("System Information:")
+        logger.info(f"- Available Memory: {memory.available/1024/1024/1024:.2f}GB")
+        logger.info(f"- Total Memory: {memory.total/1024/1024/1024:.2f}GB")
+        logger.info(f"- Available Disk Space: {disk.free/1024/1024/1024:.2f}GB")
+        logger.info(f"- Total Disk Space: {disk.total/1024/1024/1024:.2f}GB")
             
         return True
         
