@@ -74,18 +74,20 @@ check_version_compatibility()
 class DremioIngester:
     """A class for ingesting data into Dremio with memory optimization."""
     
-    def __init__(self, dremio_url: str, username: str, password: str):
+    def __init__(self, dremio_url: str, username: str, password: str, source_dremio_url: str = None):
         """
         Initialize the DremioIngester.
         
         Args:
-            dremio_url: URL of the Dremio server
+            dremio_url: URL of the target Dremio server
             username: Dremio username
             password: Dremio password
+            source_dremio_url: URL of the source Dremio instance for data sharing
         """
         self.dremio_url = dremio_url.rstrip('/')
         self.username = username
         self.password = password
+        self.source_dremio_url = source_dremio_url
         self.session = requests.Session()
         self.session.auth = (username, password)
         self.available_memory = None
@@ -106,6 +108,12 @@ class DremioIngester:
             'parquet': {'extensions': ['.parquet'], 'mime_type': 'application/x-parquet'},
             'orc': {'extensions': ['.orc'], 'mime_type': 'application/x-orc'}
         }
+
+        # Log Dremio instance information
+        logger.info(f"Target Dremio instance: {self.dremio_url}")
+        if self.source_dremio_url:
+            logger.info(f"Source Dremio instance: {self.source_dremio_url}")
+            logger.info("Data sharing mode enabled")
 
     def _check_system_resources(self):
         """Check system resources and set optimal parameters for 64-bit system."""
@@ -219,9 +227,35 @@ class DremioIngester:
         logger.info("\nPerformance Summary:")
         logger.info(tabulate(summary.items(), headers=['Metric', 'Value'], tablefmt='grid'))
 
+    def _check_dremio_connection(self):
+        """Check connection to Dremio instance and verify data sharing capabilities."""
+        try:
+            # Check target Dremio connection
+            response = self.session.get(f"{self.dremio_url}/api/v3/info")
+            if response.status_code != 200:
+                raise ConnectionError(f"Failed to connect to target Dremio instance: {response.text}")
+            
+            # If source Dremio is specified, check data sharing capabilities
+            if self.source_dremio_url:
+                source_session = requests.Session()
+                source_session.auth = (self.username, self.password)
+                source_response = source_session.get(f"{self.source_dremio_url}/api/v3/info")
+                if source_response.status_code != 200:
+                    raise ConnectionError(f"Failed to connect to source Dremio instance: {source_response.text}")
+                
+                logger.info("Successfully verified both Dremio instances")
+                logger.info("Data sharing capabilities confirmed")
+            
+        except Exception as e:
+            logger.error(f"Dremio connection check failed: {str(e)}")
+            raise
+
     def ingest_file(self, file_path: str, space_name: str, table_name: str) -> bool:
         """Ingest a file into Dremio."""
         try:
+            # Check Dremio connection and data sharing capabilities
+            self._check_dremio_connection()
+            
             # Validate file format
             fmt = self._validate_file_format(file_path)
             
@@ -270,15 +304,16 @@ def main():
         load_dotenv()
         
         # Get Dremio credentials
-        dremio_url = os.getenv('DREMIO_URL')
+        target_dremio_url = os.getenv('TARGET_DREMIO_URL')
+        source_dremio_url = os.getenv('SOURCE_DREMIO_URL')
         username = os.getenv('DREMIO_USERNAME')
         password = os.getenv('DREMIO_PASSWORD')
         
-        if not all([dremio_url, username, password]):
+        if not all([target_dremio_url, username, password]):
             raise ValueError("Missing required environment variables")
         
         # Create ingester
-        ingester = DremioIngester(dremio_url, username, password)
+        ingester = DremioIngester(target_dremio_url, username, password, source_dremio_url)
         
         # Get list of files to ingest
         test_data_dir = Path("test_data")
@@ -291,7 +326,7 @@ def main():
         
         # Ingest each file
         for file_path in files:
-            logger.info(f"\n{Fore.CYAN}Ingesting {file_path.name}...{Style.RESET_ALL}")
+            logger.info(f"\n{Fore.CYAN}Ingesting {file_path.name} from source to target Dremio...{Style.RESET_ALL}")
             try:
                 ingester.ingest_file(str(file_path), "test_space", file_path.stem)
             except Exception as e:

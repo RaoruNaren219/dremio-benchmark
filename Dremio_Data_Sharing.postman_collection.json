@@ -1,0 +1,397 @@
+{
+    "info": {
+        "name": "Dremio Data Sharing API",
+        "description": "Collection of API endpoints for data sharing and consumption between Dremio instances",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "Authentication",
+            "item": [
+                {
+                    "name": "Get Auth Token",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"userName\": \"{{username}}\",\n    \"password\": \"{{password}}\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{dremio_url}}/apiv2/login",
+                            "host": ["{{dremio_url}}"],
+                            "path": ["apiv2", "login"]
+                        },
+                        "description": "Get authentication token for Dremio API access"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Source Dremio Operations",
+            "item": [
+                {
+                    "name": "List Available Datasets",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{source_dremio_url}}/api/v3/catalog",
+                            "host": ["{{source_dremio_url}}"],
+                            "path": ["api", "v3", "catalog"]
+                        },
+                        "description": "List all available datasets in source Dremio instance"
+                    }
+                },
+                {
+                    "name": "Get Dataset Details",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{source_dremio_url}}/api/v3/catalog/{{dataset_id}}",
+                            "host": ["{{source_dremio_url}}"],
+                            "path": ["api", "v3", "catalog", "{{dataset_id}}"]
+                        },
+                        "description": "Get detailed information about a specific dataset"
+                    }
+                },
+                {
+                    "name": "Export Dataset",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"format\": \"{{format}}\",\n    \"datasetPath\": \"{{dataset_path}}\",\n    \"compression\": \"{{compression}}\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{source_dremio_url}}/api/v3/dataset/export",
+                            "host": ["{{source_dremio_url}}"],
+                            "path": ["api", "v3", "dataset", "export"]
+                        },
+                        "description": "Export dataset in specified format (CSV, Parquet, ORC)"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Target Dremio Operations",
+            "item": [
+                {
+                    "name": "Create Space",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"{{space_name}}\",\n    \"description\": \"Space for shared datasets\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{target_dremio_url}}/api/v3/space",
+                            "host": ["{{target_dremio_url}}"],
+                            "path": ["api", "v3", "space"]
+                        },
+                        "description": "Create a new space in target Dremio instance"
+                    }
+                },
+                {
+                    "name": "Import Dataset",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "{{content_type}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "formdata",
+                            "formdata": [
+                                {
+                                    "key": "file",
+                                    "type": "file",
+                                    "src": "{{file_path}}"
+                                }
+                            ]
+                        },
+                        "url": {
+                            "raw": "{{target_dremio_url}}/api/v3/dataset/{{space_name}}/{{table_name}}",
+                            "host": ["{{target_dremio_url}}"],
+                            "path": ["api", "v3", "dataset", "{{space_name}}", "{{table_name}}"]
+                        },
+                        "description": "Import dataset into target Dremio instance"
+                    }
+                },
+                {
+                    "name": "Verify Dataset",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{target_dremio_url}}/api/v3/catalog/{{space_name}}/{{table_name}}",
+                            "host": ["{{target_dremio_url}}"],
+                            "path": ["api", "v3", "catalog", "{{space_name}}", "{{table_name}}"]
+                        },
+                        "description": "Verify dataset exists and is accessible in target Dremio"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Data Sharing Operations",
+            "item": [
+                {
+                    "name": "Share Dataset",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"sourceDataset\": \"{{source_dataset_path}}\",\n    \"targetSpace\": \"{{target_space}}\",\n    \"targetName\": \"{{target_name}}\",\n    \"format\": \"{{format}}\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{source_dremio_url}}/api/v3/dataset/share",
+                            "host": ["{{source_dremio_url}}"],
+                            "path": ["api", "v3", "dataset", "share"]
+                        },
+                        "description": "Share dataset from source to target Dremio instance"
+                    }
+                },
+                {
+                    "name": "Get Sharing Status",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{source_dremio_url}}/api/v3/dataset/share/status/{{share_id}}",
+                            "host": ["{{source_dremio_url}}"],
+                            "path": ["api", "v3", "dataset", "share", "status", "{{share_id}}"]
+                        },
+                        "description": "Check status of dataset sharing operation"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Metrics Collection",
+            "item": [
+                {
+                    "name": "Get Query Performance Metrics",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{dremio_url}}/api/v3/metrics/queries",
+                            "host": ["{{dremio_url}}"],
+                            "path": ["api", "v3", "metrics", "queries"]
+                        },
+                        "description": "Get performance metrics for queries"
+                    }
+                },
+                {
+                    "name": "Get Dataset Metrics",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{dremio_url}}/api/v3/metrics/datasets/{{dataset_id}}",
+                            "host": ["{{dremio_url}}"],
+                            "path": ["api", "v3", "metrics", "datasets", "{{dataset_id}}"]
+                        },
+                        "description": "Get metrics for a specific dataset"
+                    }
+                },
+                {
+                    "name": "Get Sharing Performance Metrics",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{source_dremio_url}}/api/v3/metrics/sharing/{{share_id}}",
+                            "host": ["{{source_dremio_url}}"],
+                            "path": ["api", "v3", "metrics", "sharing", "{{share_id}}"]
+                        },
+                        "description": "Get performance metrics for data sharing operations"
+                    }
+                },
+                {
+                    "name": "Get System Resource Metrics",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "{{auth_token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{dremio_url}}/api/v3/metrics/system",
+                            "host": ["{{dremio_url}}"],
+                            "path": ["api", "v3", "metrics", "system"]
+                        },
+                        "description": "Get system resource utilization metrics"
+                    }
+                }
+            ]
+        }
+    ],
+    "variable": [
+        {
+            "key": "source_dremio_url",
+            "value": "http://source-dremio:9047",
+            "type": "string"
+        },
+        {
+            "key": "target_dremio_url",
+            "value": "http://target-dremio:9047",
+            "type": "string"
+        },
+        {
+            "key": "username",
+            "value": "your_username",
+            "type": "string"
+        },
+        {
+            "key": "password",
+            "value": "your_password",
+            "type": "string"
+        },
+        {
+            "key": "auth_token",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "space_name",
+            "value": "shared_data",
+            "type": "string"
+        },
+        {
+            "key": "table_name",
+            "value": "shared_table",
+            "type": "string"
+        },
+        {
+            "key": "format",
+            "value": "parquet",
+            "type": "string"
+        },
+        {
+            "key": "content_type",
+            "value": "application/x-parquet",
+            "type": "string"
+        },
+        {
+            "key": "file_path",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "dataset_id",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "dataset_path",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "compression",
+            "value": "snappy",
+            "type": "string"
+        },
+        {
+            "key": "share_id",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "metrics_interval",
+            "value": "5m",
+            "type": "string"
+        },
+        {
+            "key": "metrics_start_time",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "metrics_end_time",
+            "value": "",
+            "type": "string"
+        }
+    ]
+} 

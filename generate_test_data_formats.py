@@ -15,6 +15,7 @@ from loguru import logger
 from tqdm import tqdm
 from tabulate import tabulate
 from colorama import init, Fore, Style
+from dotenv import load_dotenv
 
 # Initialize colorama for Windows
 init()
@@ -72,16 +73,18 @@ check_version_compatibility()
 class DataGenerator:
     """A class for generating test data in various formats with memory optimization."""
     
-    def __init__(self, output_dir: str = "test_data", chunk_size: int = 100000):
+    def __init__(self, output_dir: str = "test_data", chunk_size: int = 100000, source_dremio_url: str = None):
         """
         Initialize the DataGenerator.
         
         Args:
             output_dir: Directory to save generated files
             chunk_size: Number of rows per chunk for memory optimization
+            source_dremio_url: URL of the source Dremio instance for data sharing
         """
         self.output_dir = Path(output_dir)
         self.chunk_size = chunk_size
+        self.source_dremio_url = source_dremio_url
         self.available_memory = None
         self.min_required_memory = 2 * 1024 * 1024 * 1024  # 2GB minimum
         self.performance_metrics = {
@@ -109,6 +112,11 @@ class DataGenerator:
             'years_of_service': np.int32,
             'bonus': np.float64
         }
+
+        # Log source Dremio information
+        if self.source_dremio_url:
+            logger.info(f"Source Dremio instance: {self.source_dremio_url}")
+            logger.info("Data will be generated for cross-cluster sharing")
 
     def _check_system_resources(self):
         """Check system resources and set optimal parameters for 64-bit system."""
@@ -421,8 +429,14 @@ class DataGenerator:
 def main():
     """Main function to generate test data in all formats."""
     try:
+        # Load environment variables
+        load_dotenv()
+        
+        # Get source Dremio URL
+        source_dremio_url = os.getenv('SOURCE_DREMIO_URL')
+        
         # Create data generator
-        generator = DataGenerator()
+        generator = DataGenerator(source_dremio_url=source_dremio_url)
         
         # Generate data in all formats
         formats = {
@@ -433,7 +447,7 @@ def main():
         }
         
         for format_name, generate_func in formats.items():
-            logger.info(f"\n{Fore.CYAN}Generating {format_name} file...{Style.RESET_ALL}")
+            logger.info(f"\n{Fore.CYAN}Generating {format_name} file for cross-cluster sharing...{Style.RESET_ALL}")
             try:
                 generate_func()
             except Exception as e:
