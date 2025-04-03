@@ -1,16 +1,18 @@
+# Standard library imports
 import os
 import sys
 import gc
 import time
-import psutil
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
+
+# Third-party imports
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pyorc
+import psutil
 import pkg_resources
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 from loguru import logger
 from tqdm import tqdm
 from tabulate import tabulate
@@ -20,7 +22,7 @@ from dotenv import load_dotenv
 # Initialize colorama for Windows
 init()
 
-# Configure logging
+# Configure logging with rotation and retention
 logger.remove()
 logger.add(
     sys.stderr,
@@ -34,13 +36,15 @@ logger.add(
     level="DEBUG"
 )
 
-def check_version_compatibility():
-    """Check if installed package versions match required versions."""
+def check_version_compatibility() -> None:
+    """
+    Check if installed package versions match required versions.
+    Exits with status code 1 if incompatible versions are found.
+    """
     required_versions = {
         'pandas': '1.4.4',
         'numpy': '1.23.5',
         'pyarrow': '10.0.1',
-        'pyorc': '0.10.0',
         'requests': '2.31.0',
         'python-dotenv': '0.21.1',
         'psutil': '5.9.5',
@@ -118,8 +122,11 @@ class DataGenerator:
             logger.info(f"Source Dremio instance: {self.source_dremio_url}")
             logger.info("Data will be generated for cross-cluster sharing")
 
-    def _check_system_resources(self):
-        """Check system resources and set optimal parameters for 64-bit system."""
+    def _check_system_resources(self) -> None:
+        """
+        Check system resources and set optimal parameters for 64-bit system.
+        Raises RuntimeError if insufficient resources are available.
+        """
         try:
             # Check available memory (64-bit system)
             self.available_memory = psutil.virtual_memory().available
@@ -146,7 +153,15 @@ class DataGenerator:
             raise
 
     def _optimize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Optimize DataFrame memory usage for 64-bit system."""
+        """
+        Optimize DataFrame memory usage for 64-bit system.
+        
+        Args:
+            df: Input DataFrame to optimize
+            
+        Returns:
+            Optimized DataFrame with reduced memory usage
+        """
         try:
             # Optimize numeric columns with 64-bit considerations
             for col in df.select_dtypes(include=['int64']).columns:
@@ -175,7 +190,7 @@ class DataGenerator:
             logger.error(f"Error optimizing DataFrame: {str(e)}")
             return df
 
-    def _cleanup_memory(self):
+    def _cleanup_memory(self) -> None:
         """Clean up memory and force garbage collection for 64-bit system."""
         gc.collect()
         current_memory = psutil.Process().memory_info().rss
@@ -186,7 +201,16 @@ class DataGenerator:
             gc.collect(0)  # And generation 0 objects
 
     def _generate_chunk(self, start_idx: int, size: int) -> pd.DataFrame:
-        """Generate a chunk of data with optimized memory usage."""
+        """
+        Generate a chunk of data with optimized memory usage.
+        
+        Args:
+            start_idx: Starting index for the chunk
+            size: Number of rows to generate
+            
+        Returns:
+            DataFrame containing the generated data
+        """
         try:
             # Pre-allocate arrays for better memory efficiency
             data = {
@@ -213,13 +237,19 @@ class DataGenerator:
             logger.error(f"Error generating chunk: {str(e)}")
             raise
 
-    def _record_performance_metrics(self, file_size: int, generation_time: float):
-        """Record performance metrics for analysis."""
+    def _record_performance_metrics(self, file_size: int, generation_time: float) -> None:
+        """
+        Record performance metrics for analysis.
+        
+        Args:
+            file_size: Size of the generated file in bytes
+            generation_time: Time taken to generate the file in seconds
+        """
         self.performance_metrics['file_sizes'].append(file_size)
         self.performance_metrics['generation_times'].append(generation_time)
         self.performance_metrics['memory_usage'].append(psutil.Process().memory_info().rss)
 
-    def _print_performance_summary(self):
+    def _print_performance_summary(self) -> None:
         """Print a summary of performance metrics."""
         if not self.performance_metrics['file_sizes']:
             logger.warning("No performance metrics recorded")
@@ -236,7 +266,15 @@ class DataGenerator:
         logger.info(tabulate(summary.items(), headers=['Metric', 'Value'], tablefmt='grid'))
 
     def generate_csv(self, num_rows: int = 1000000) -> str:
-        """Generate a CSV file with the specified number of rows."""
+        """
+        Generate a CSV file with the specified number of rows.
+        
+        Args:
+            num_rows: Number of rows to generate
+            
+        Returns:
+            Path to the generated CSV file
+        """
         try:
             output_file = self.output_dir / "test_data.csv"
             start_time = time.time()
@@ -276,7 +314,15 @@ class DataGenerator:
             raise
 
     def generate_txt(self, num_rows: int = 1000000) -> str:
-        """Generate a tab-separated text file with the specified number of rows."""
+        """
+        Generate a tab-separated text file with the specified number of rows.
+        
+        Args:
+            num_rows: Number of rows to generate
+            
+        Returns:
+            Path to the generated TXT file
+        """
         try:
             output_file = self.output_dir / "test_data.txt"
             start_time = time.time()
@@ -316,7 +362,15 @@ class DataGenerator:
             raise
 
     def generate_parquet(self, num_rows: int = 1000000) -> str:
-        """Generate a Parquet file with the specified number of rows."""
+        """
+        Generate a Parquet file with the specified number of rows.
+        
+        Args:
+            num_rows: Number of rows to generate
+            
+        Returns:
+            Path to the generated Parquet file
+        """
         try:
             output_file = self.output_dir / "test_data.parquet"
             start_time = time.time()
@@ -359,74 +413,7 @@ class DataGenerator:
             logger.error(f"Error generating Parquet file: {str(e)}")
             raise
 
-    def generate_orc(self, num_rows: int = 1000000) -> str:
-        """Generate an ORC file with the specified number of rows."""
-        try:
-            output_file = self.output_dir / "test_data.orc"
-            start_time = time.time()
-            
-            # Calculate number of chunks
-            num_chunks = (num_rows + self.chunk_size - 1) // self.chunk_size
-            
-            # Create schema for pyorc 0.10.0
-            schema = pyorc.TypeDescription.from_string(
-                "struct<id:bigint,name:string,age:int,salary:double,"
-                "department:string,hire_date:string,is_active:boolean,"
-                "performance_score:float,years_of_service:int,bonus:double>"
-            )
-            
-            with pyorc.Writer(str(output_file), schema) as writer:
-                with tqdm(total=num_rows, desc="Generating ORC", unit="rows") as pbar:
-                    for i in range(num_chunks):
-                        start_idx = i * self.chunk_size
-                        chunk_size = min(self.chunk_size, num_rows - start_idx)
-                        
-                        # Generate and write chunk
-                        df = self._generate_chunk(start_idx, chunk_size)
-                        
-                        # Convert DataFrame to list of tuples for pyorc 0.10.0
-                        data = [
-                            (
-                                row['id'],
-                                row['name'],
-                                row['age'],
-                                float(row['salary']),
-                                row['department'],
-                                row['hire_date'],
-                                bool(row['is_active']),
-                                float(row['performance_score']),
-                                row['years_of_service'],
-                                float(row['bonus'])
-                            )
-                            for _, row in df.iterrows()
-                        ]
-                        
-                        # Write data in batches
-                        writer.writerows(data)
-                        
-                        # Update progress
-                        pbar.update(chunk_size)
-                        
-                        # Clean up memory
-                        self._cleanup_memory()
-            
-            generation_time = time.time() - start_time
-            file_size = output_file.stat().st_size
-            
-            # Record metrics
-            self._record_performance_metrics(file_size, generation_time)
-            
-            logger.info(f"ORC file generated: {output_file}")
-            logger.info(f"Size: {file_size/1024/1024:.2f}MB")
-            logger.info(f"Time: {generation_time:.2f}s")
-            
-            return str(output_file)
-            
-        except Exception as e:
-            logger.error(f"Error generating ORC file: {str(e)}")
-            raise
-
-def main():
+def main() -> None:
     """Main function to generate test data in all formats."""
     try:
         # Load environment variables
@@ -442,8 +429,7 @@ def main():
         formats = {
             'CSV': generator.generate_csv,
             'TXT': generator.generate_txt,
-            'Parquet': generator.generate_parquet,
-            'ORC': generator.generate_orc
+            'Parquet': generator.generate_parquet
         }
         
         for format_name, generate_func in formats.items():

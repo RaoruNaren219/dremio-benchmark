@@ -1,17 +1,19 @@
+# Standard library imports
 import os
 import sys
 import gc
 import time
-import psutil
-import requests
-import pandas as pd
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
-import pyorc
-import pkg_resources
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
+
+# Third-party imports
+import numpy as np
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+import psutil
+import requests
+import pkg_resources
 from loguru import logger
 from tqdm import tqdm
 from tabulate import tabulate
@@ -21,7 +23,7 @@ from dotenv import load_dotenv
 # Initialize colorama for Windows
 init()
 
-# Configure logging
+# Configure logging with rotation and retention
 logger.remove()
 logger.add(
     sys.stderr,
@@ -35,13 +37,15 @@ logger.add(
     level="DEBUG"
 )
 
-def check_version_compatibility():
-    """Check if installed package versions match required versions."""
+def check_version_compatibility() -> None:
+    """
+    Check if installed package versions match required versions.
+    Exits with status code 1 if incompatible versions are found.
+    """
     required_versions = {
         'pandas': '1.4.4',
         'numpy': '1.23.5',
         'pyarrow': '10.0.1',
-        'pyorc': '0.10.0',
         'requests': '2.31.0',
         'python-dotenv': '0.21.1',
         'psutil': '5.9.5',
@@ -105,8 +109,7 @@ class DremioIngester:
         self.supported_formats = {
             'csv': {'extensions': ['.csv'], 'mime_type': 'text/csv'},
             'txt': {'extensions': ['.txt'], 'mime_type': 'text/plain'},
-            'parquet': {'extensions': ['.parquet'], 'mime_type': 'application/x-parquet'},
-            'orc': {'extensions': ['.orc'], 'mime_type': 'application/x-orc'}
+            'parquet': {'extensions': ['.parquet'], 'mime_type': 'application/x-parquet'}
         }
 
         # Log Dremio instance information
@@ -115,8 +118,11 @@ class DremioIngester:
             logger.info(f"Source Dremio instance: {self.source_dremio_url}")
             logger.info("Data sharing mode enabled")
 
-    def _check_system_resources(self):
-        """Check system resources and set optimal parameters for 64-bit system."""
+    def _check_system_resources(self) -> None:
+        """
+        Check system resources and set optimal parameters for 64-bit system.
+        Raises RuntimeError if insufficient resources are available.
+        """
         try:
             # Check available memory (64-bit system)
             self.available_memory = psutil.virtual_memory().available
@@ -131,7 +137,7 @@ class DremioIngester:
             logger.error(f"System resource check failed: {str(e)}")
             raise
 
-    def _cleanup_memory(self):
+    def _cleanup_memory(self) -> None:
         """Clean up memory and force garbage collection for 64-bit system."""
         gc.collect()
         current_memory = psutil.Process().memory_info().rss
@@ -142,7 +148,18 @@ class DremioIngester:
             gc.collect(0)  # And generation 0 objects
 
     def _validate_file_format(self, file_path: str) -> str:
-        """Validate file format and return the format type."""
+        """
+        Validate file format and return the format type.
+        
+        Args:
+            file_path: Path to the file to validate
+            
+        Returns:
+            Format type (csv, txt, or parquet)
+            
+        Raises:
+            ValueError: If file format is not supported
+        """
         try:
             file_ext = Path(file_path).suffix.lower()
             for fmt, info in self.supported_formats.items():
@@ -153,8 +170,17 @@ class DremioIngester:
             logger.error(f"File format validation failed: {str(e)}")
             raise
 
-    def _validate_file_integrity(self, file_path: str, fmt: str):
-        """Validate file integrity based on format."""
+    def _validate_file_integrity(self, file_path: str, fmt: str) -> None:
+        """
+        Validate file integrity based on format.
+        
+        Args:
+            file_path: Path to the file to validate
+            fmt: Format type of the file
+            
+        Raises:
+            ValueError: If file integrity check fails
+        """
         try:
             if fmt == 'csv' or fmt == 'txt':
                 # Check if file has header and data
@@ -172,46 +198,25 @@ class DremioIngester:
                 if len(table.column_names) != 10:  # Expected number of columns
                     raise ValueError(f"Invalid number of columns: {len(table.column_names)}")
             
-            elif fmt == 'orc':
-                # Check ORC file structure using pyorc 0.10.0
-                with pyorc.Reader(file_path) as reader:
-                    if reader.num_rows == 0:
-                        raise ValueError("File is empty")
-                    schema = reader.schema
-                    if len(schema.fields) != 10:  # Expected number of columns
-                        raise ValueError(f"Invalid number of columns: {len(schema.fields)}")
-                    
-                    # Verify schema types
-                    expected_types = {
-                        'id': 'bigint',
-                        'name': 'string',
-                        'age': 'int',
-                        'salary': 'double',
-                        'department': 'string',
-                        'hire_date': 'string',
-                        'is_active': 'boolean',
-                        'performance_score': 'float',
-                        'years_of_service': 'int',
-                        'bonus': 'double'
-                    }
-                    
-                    for field, expected_type in expected_types.items():
-                        if str(schema.fields[field].type) != expected_type:
-                            raise ValueError(f"Invalid type for column {field}: expected {expected_type}, got {schema.fields[field].type}")
-            
             logger.info(f"File integrity check passed for {file_path}")
             
         except Exception as e:
             logger.error(f"File integrity check failed: {str(e)}")
             raise
 
-    def _record_performance_metrics(self, file_size: int, ingestion_time: float):
-        """Record performance metrics for analysis."""
+    def _record_performance_metrics(self, file_size: int, ingestion_time: float) -> None:
+        """
+        Record performance metrics for analysis.
+        
+        Args:
+            file_size: Size of the ingested file in bytes
+            ingestion_time: Time taken to ingest the file in seconds
+        """
         self.performance_metrics['file_sizes'].append(file_size)
         self.performance_metrics['ingestion_times'].append(ingestion_time)
         self.performance_metrics['memory_usage'].append(psutil.Process().memory_info().rss)
 
-    def _print_performance_summary(self):
+    def _print_performance_summary(self) -> None:
         """Print a summary of performance metrics."""
         if not self.performance_metrics['file_sizes']:
             logger.warning("No performance metrics recorded")
@@ -227,8 +232,13 @@ class DremioIngester:
         logger.info("\nPerformance Summary:")
         logger.info(tabulate(summary.items(), headers=['Metric', 'Value'], tablefmt='grid'))
 
-    def _check_dremio_connection(self):
-        """Check connection to Dremio instance and verify data sharing capabilities."""
+    def _check_dremio_connection(self) -> None:
+        """
+        Check connection to Dremio instance and verify data sharing capabilities.
+        
+        Raises:
+            ConnectionError: If connection to Dremio fails
+        """
         try:
             # Check target Dremio connection
             response = self.session.get(f"{self.dremio_url}/api/v3/info")
@@ -251,7 +261,17 @@ class DremioIngester:
             raise
 
     def ingest_file(self, file_path: str, space_name: str, table_name: str) -> bool:
-        """Ingest a file into Dremio."""
+        """
+        Ingest a file into Dremio.
+        
+        Args:
+            file_path: Path to the file to ingest
+            space_name: Name of the Dremio space to ingest into
+            table_name: Name of the table to create in the space
+            
+        Returns:
+            True if ingestion was successful, False otherwise
+        """
         try:
             # Check Dremio connection and data sharing capabilities
             self._check_dremio_connection()
@@ -297,7 +317,7 @@ class DremioIngester:
             logger.error(f"Error ingesting file: {str(e)}")
             return False
 
-def main():
+def main() -> None:
     """Main function to ingest test data into Dremio."""
     try:
         # Load environment variables

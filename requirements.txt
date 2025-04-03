@@ -2,7 +2,6 @@
 pandas==1.4.4
 numpy==1.23.5
 pyarrow==10.0.1
-pyorc==0.10.0
 
 # HTTP and environment management
 requests==2.31.0
