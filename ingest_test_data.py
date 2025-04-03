@@ -38,12 +38,12 @@ logger.add(
 def check_version_compatibility():
     """Check if installed package versions match required versions."""
     required_versions = {
-        'pandas': '1.5.3',
+        'pandas': '1.4.4',
         'numpy': '1.23.5',
-        'pyarrow': '12.0.1',
+        'pyarrow': '10.0.1',
         'pyorc': '0.10.0',
         'requests': '2.31.0',
-        'python-dotenv': '1.0.0',
+        'python-dotenv': '0.21.1',
         'psutil': '5.9.5',
         'loguru': '0.7.2',
         'tqdm': '4.65.0',

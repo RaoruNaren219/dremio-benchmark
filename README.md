@@ -1,268 +1,118 @@
-# Cross-Dremio Benchmarking Tool
+# Dremio Data Sharing Project
 
-[![Python Version](https://img.shields.io/badge/python-3.10.11-blue.svg)](https://www.python.org/downloads/)
+This project provides tools for generating test data in various formats and ingesting it into Dremio for cross-cluster data sharing.
 
-A comprehensive tool for generating test data in various formats (CSV, TXT, Parquet, ORC) and ingesting it into Dremio. This tool provides efficient data generation with memory optimization and robust ingestion capabilities.
+## Requirements
 
-## Table of Contents
-- [Architecture](#architecture)
-- [Features](#features)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Data Generation](#data-generation)
-- [Data Ingestion](#data-ingestion)
-- [Performance Monitoring](#performance-monitoring)
-- [Troubleshooting](#troubleshooting)
-
-## Architecture
-
-The solution consists of two main components:
-
-1. **Data Generation Script** (`generate_test_data_formats.py`):
-   - Generates test data in multiple formats (CSV, TXT, Parquet, ORC)
-   - Memory-optimized data generation
-   - Configurable data size and structure
-   - Performance monitoring and metrics
-
-2. **Data Ingestion Script** (`ingest_test_data.py`):
-   - Handles authentication with Dremio
-   - Validates file formats and integrity
-   - Supports multiple file formats
-   - Provides detailed ingestion metrics
-
-## Features
-
-- 📊 Multiple data format support (CSV, TXT, Parquet, ORC)
-- 💾 Memory-optimized data generation
-- 📈 Performance monitoring and metrics
-- 🔍 File format validation
-- 📝 Comprehensive logging
-- ⚡ Batch processing
-- 🔒 Secure credential management
-- 🧹 Automatic memory cleanup
-- 📊 Performance metrics collection
-- 🔄 Configurable scale factors
-
-## Prerequisites
-
-- Python 3.10.11 or later
-- Dremio cluster with proper access
-- Sufficient disk space (minimum 10GB)
-- Sufficient memory (minimum 2GB)
-- Required Python packages (see requirements.txt)
+- Python 3.8.17 (64-bit)
+- WSL with RHEL 8 (recommended)
+- At least 2GB of available memory
+- At least 10GB of free disk space
 
 ## Installation
 
-1. Clone the repository:
-   ```powershell
-   git clone https://github.com/yourusername/dremio-benchmark.git
-   cd dremio-benchmark
-   ```
+### Option 1: Using Conda (Recommended)
 
-2. Create and activate a virtual environment with Python 3.10 64-bit:
-   ```powershell
-   # Make sure you're using Python 3.10 64-bit
-   python -c "import platform; print(platform.architecture())"  # Should show ('64bit', 'WindowsPE')
-   
-   # Create virtual environment
-   python -m venv venv
-   .\venv\Scripts\Activate.ps1
-   ```
+1. Install Miniconda or Anaconda if you don't have it already.
 
-3. Update pip and install build dependencies:
-   ```powershell
-   python -m pip install --upgrade pip
-   pip install --upgrade setuptools wheel
-   pip install --upgrade cython
-   ```
+2. Create and activate the conda environment:
+```bash
+conda env create -f environment.yml
+conda activate dremio-data-sharing
+```
 
-4. Install core dependencies with specific versions:
-   ```powershell
-   # Install numpy first (required for other packages)
-   pip install numpy==1.23.5
-   
-   # Install pandas and pyarrow
-   pip install pandas==1.5.3
-   pip install pyarrow==12.0.1
-   
-   # Install remaining dependencies
-   pip install -r requirements.txt
-   ```
+### Option 2: Using pip
 
-5. Create a `.env` file with your Dremio credentials:
-   ```env
-   DREMIO_URL=http://your-dremio-host:9047
-   DREMIO_USERNAME=your-username
-   DREMIO_PASSWORD=your-password
-   DATA_DIR=test_data
-   ```
+1. Create and activate a virtual environment:
+```bash
+python3 -m venv venv
+source venv/bin/activate  # On Linux/WSL
+# OR
+.\venv\Scripts\activate  # On Windows
+```
 
-### Installation Notes
+2. Upgrade pip and install build tools:
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
 
-- **Python Version**: This project requires Python 3.10 64-bit
-- **System Requirements**:
-  - Windows 10/11 64-bit
-  - Minimum 2GB available RAM
-  - Minimum 10GB free disk space
-  - Visual C++ Build Tools (required for some packages)
-
-- **Build Dependencies**:
-  - setuptools>=65.5.1
-  - wheel>=0.38.4
-  - cython>=0.29.36
-
-- **Core Package Versions**:
-  - pandas==1.5.3
-  - numpy==1.23.5
-  - pyarrow==12.0.1
-  - pyorc==1.7.0
-
-- **Troubleshooting**:
-  - If you encounter build errors:
-    ```powershell
-    # Install Visual C++ Build Tools first
-    # Then try installing pre-built wheels:
-    pip install --only-binary :all: numpy==1.23.5
-    pip install --only-binary :all: pandas==1.5.3
-    ```
-  - For memory issues:
-    ```powershell
-    # Set environment variable for larger memory allocation
-    $env:PYTHONMALLOC = "debug"
-    ```
-
-- **Performance Optimization**:
-  - The scripts will automatically optimize for 64-bit systems
-  - Memory management is configured for 64-bit operations
-  - Native readers are enabled for Parquet and ORC files
+3. Install the required packages:
+```bash
+pip install -r requirements.txt
+```
 
 ## Configuration
 
-The tool supports the following configuration options:
-
-1. **Environment Variables**:
-   - `DREMIO_URL`: Dremio server URL
-   - `DREMIO_USERNAME`: Dremio username
-   - `DREMIO_PASSWORD`: Dremio password
-   - `DATA_DIR`: Directory for generated data
-
-2. **Command Line Arguments**:
-   ```powershell
-   python ingest_test_data.py --sizes 1 10 100 --formats csv parquet orc --space test_data --dry-run
-   ```
-   - `--sizes`: File sizes to generate (1, 10, or 100 GB)
-   - `--formats`: File formats to generate
-   - `--space`: Dremio space name
-   - `--dry-run`: Preview without actual ingestion
+1. Create a `.env` file in the project root directory with your Dremio credentials:
+```
+SOURCE_DREMIO_URL=http://your-source-dremio:9047
+TARGET_DREMIO_URL=http://your-target-dremio:9047
+DREMIO_USERNAME=your_username
+DREMIO_PASSWORD=your_password
+```
 
 ## Usage
 
-### Data Generation
+### Generating Test Data
 
-1. Generate test data in all formats:
-   ```powershell
-   python generate_test_data_formats.py
-   ```
+Run the data generation script to create test data in various formats:
+```bash
+python generate_test_data_formats.py
+```
 
-2. The script will:
-   - Check system resources
-   - Generate data in chunks
-   - Optimize memory usage
-   - Create files in the specified directory
-   - Record performance metrics
+This will generate the following files in the `test_data` directory:
+- `test_data.csv` - CSV format
+- `test_data.txt` - Tab-separated text format
+- `test_data.parquet` - Parquet format
+- `test_data.orc` - ORC format
 
-3. Generated data structure:
-   ```python
-   {
-       'id': np.int64,
-       'name': str,
-       'age': np.int32,
-       'salary': np.float64,
-       'department': str,
-       'hire_date': str,
-       'is_active': bool,
-       'performance_score': np.float32,
-       'years_of_service': np.int32,
-       'bonus': np.float64
-   }
-   ```
+### Ingesting Data into Dremio
 
-### Data Ingestion
+Run the ingestion script to upload the generated data to Dremio:
+```bash
+python ingest_test_data.py
+```
 
-1. Ingest generated data into Dremio:
-   ```powershell
-   python ingest_test_data.py
-   ```
-
-2. The script will:
-   - Validate file formats
-   - Check file integrity
-   - Create necessary Dremio spaces
-   - Ingest data with proper settings
-   - Monitor ingestion progress
-
-3. Supported ingestion formats:
-   - CSV: Text-based with headers
-   - TXT: Tab-separated values
-   - Parquet: Columnar format with optimizations
-   - ORC: Optimized Row Columnar format
+This will:
+1. Validate the file formats
+2. Check file integrity
+3. Upload the data to the specified Dremio instance
+4. Record performance metrics
 
 ## Performance Monitoring
 
-The tool provides comprehensive performance metrics:
+The scripts include built-in performance monitoring that tracks:
+- File sizes
+- Generation/ingestion times
+- Memory usage
 
-1. **Generation Metrics**:
-   - File sizes
-   - Generation times
-   - Memory usage
-   - Chunk processing times
-
-2. **Ingestion Metrics**:
-   - Success/failure rates
-   - Ingestion times
-   - File validation results
-   - Resource usage
-
-3. **Logging**:
-   - Detailed operation logs
-   - Error tracking
-   - Performance summaries
-   - Resource utilization
+Performance metrics are logged to:
+- `data_generation.log` - For data generation
+- `data_ingestion.log` - For data ingestion
 
 ## Troubleshooting
 
-1. **Memory Issues**:
-   - Check available system memory
-   - Adjust chunk size in configuration
-   - Monitor memory usage in logs
-   - Use memory cleanup functions
+### Memory Issues
 
-2. **Format Issues**:
-   - Verify file format compatibility
-   - Check file integrity
-   - Review format-specific settings
-   - Validate data structure
+If you encounter memory-related errors:
+1. Reduce the chunk size in the `DataGenerator` class
+2. Close other memory-intensive applications
+3. Increase your system's available memory
 
-3. **Ingestion Issues**:
-   - Check Dremio connectivity
-   - Verify credentials
-   - Review space permissions
-   - Check file access rights
+### Build Errors
 
-4. **Performance Issues**:
-   - Monitor system resources
-   - Check disk space
-   - Review chunk sizes
-   - Analyze performance metrics
+If you encounter build errors with `pyorc`:
+1. Ensure you have the required build tools installed
+2. Try installing the pre-built wheel if available
+3. Check that you're using Python 3.8.17 64-bit
 
-5. **Installation Issues**:
-   - Ensure pip is up to date
-   - Install prerequisite packages first
-   - Check for Visual C++ Build Tools on Windows
-   - Verify Python version compatibility
+### Connection Issues
+
+If you have trouble connecting to Dremio:
+1. Verify your credentials in the `.env` file
+2. Check that the Dremio server is running and accessible
+3. Ensure your network allows connections to the Dremio ports
 
 ## License
 
-This project is proprietary and confidential. All rights reserved.
+This project is licensed under the MIT License - see the LICENSE file for details.
