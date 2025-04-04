@@ -386,23 +386,25 @@ class DataGenerator:
                 ('last_review_date', pa.timestamp('ns'))
             ])
             
-            # Process data in chunks
-            for chunk_start in range(0, num_rows, self.chunk_size):
-                chunk_size = min(self.chunk_size, num_rows - chunk_start)
-                chunk_df = self._generate_chunk(chunk_start, chunk_size)
-                
-                # Convert DataFrame chunk to PyArrow Table with schema
-                table = pa.Table.from_pandas(chunk_df, schema=schema)
-                
-                # Write chunk to Parquet file
-                if chunk_start == 0:
-                    pq.write_table(table, str(output_file))
-                else:
-                    pq.write_table(table, str(output_file), append=True)
-                
-                # Log progress
-                progress = (chunk_start + chunk_size) / num_rows * 100
-                logger.info(f"Progress: {progress:.2f}% complete")
+            # Process data in chunks using ParquetWriter
+            with pq.ParquetWriter(str(output_file), schema) as writer:
+                for chunk_start in range(0, num_rows, self.chunk_size):
+                    chunk_size = min(self.chunk_size, num_rows - chunk_start)
+                    chunk_df = self._generate_chunk(chunk_start, chunk_size)
+                    
+                    # Convert DataFrame chunk to PyArrow Table with schema
+                    table = pa.Table.from_pandas(chunk_df, schema=schema)
+                    
+                    # Write chunk to Parquet file
+                    writer.write_table(table)
+                    
+                    # Log progress
+                    progress = (chunk_start + chunk_size) / num_rows * 100
+                    logger.info(f"Progress: {progress:.2f}% complete")
+                    
+                    # Clean up memory after each chunk
+                    del chunk_df, table
+                    self._cleanup_memory()
             
             # Record metrics
             end_time = time.time()
