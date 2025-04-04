@@ -361,53 +361,75 @@ class DataGenerator:
             logger.error(f"Error generating TXT file: {str(e)}")
             raise
 
-    def generate_parquet(self, num_rows: int = 1000000) -> str:
+    def generate_parquet(self, num_rows: int) -> None:
         """
-        Generate a Parquet file with the specified number of rows.
+        Generate Parquet file with memory optimization.
         
         Args:
             num_rows: Number of rows to generate
-            
-        Returns:
-            Path to the generated Parquet file
         """
         try:
-            output_file = self.output_dir / "test_data.parquet"
-            start_time = time.time()
+            # Define schema explicitly
+            schema = pa.schema([
+                ('id', pa.int64()),
+                ('name', pa.string()),
+                ('email', pa.string()),
+                ('age', pa.int32()),
+                ('salary', pa.float64()),
+                ('department', pa.string()),
+                ('hire_date', pa.timestamp('ns')),
+                ('is_active', pa.bool_()),
+                ('performance_score', pa.float64()),
+                ('last_review_date', pa.timestamp('ns'))
+            ])
             
-            # Calculate number of chunks
-            num_chunks = (num_rows + self.chunk_size - 1) // self.chunk_size
+            # Create output file path
+            output_file = self.output_dir / f"test_data_{num_rows}.parquet"
             
-            # Create empty table with schema
-            schema = pa.Schema.from_pandas(self._generate_chunk(0, 1))
-            with pq.ParquetWriter(output_file, schema) as writer:
-                with tqdm(total=num_rows, desc="Generating Parquet", unit="rows") as pbar:
-                    for i in range(num_chunks):
-                        start_idx = i * self.chunk_size
-                        chunk_size = min(self.chunk_size, num_rows - start_idx)
+            # Process in chunks
+            total_chunks = (num_rows + self.chunk_size - 1) // self.chunk_size
+            with tqdm(total=total_chunks, desc="Generating Parquet") as pbar:
+                with pq.ParquetWriter(output_file, schema) as writer:
+                    for i in range(0, num_rows, self.chunk_size):
+                        chunk_size = min(self.chunk_size, num_rows - i)
                         
-                        # Generate and write chunk
-                        df = self._generate_chunk(start_idx, chunk_size)
-                        table = pa.Table.from_pandas(df)
+                        # Generate chunk data with consistent types
+                        chunk_data = {
+                            'id': np.arange(i, i + chunk_size, dtype=np.int64),
+                            'name': [f"User_{j}" for j in range(i, i + chunk_size)],
+                            'email': [f"user_{j}@example.com" for j in range(i, i + chunk_size)],
+                            'age': np.random.randint(18, 65, size=chunk_size, dtype=np.int32),
+                            'salary': np.random.uniform(30000, 120000, size=chunk_size).astype(np.float64),
+                            'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing'], size=chunk_size),
+                            'hire_date': pd.date_range(start='2020-01-01', periods=chunk_size, freq='D'),
+                            'is_active': np.random.choice([True, False], size=chunk_size),
+                            'performance_score': np.random.uniform(1, 5, size=chunk_size).astype(np.float64),
+                            'last_review_date': pd.date_range(start='2021-01-01', periods=chunk_size, freq='D')
+                        }
+                        
+                        # Create DataFrame with explicit dtypes
+                        df = pd.DataFrame(chunk_data)
+                        
+                        # Convert to PyArrow Table with explicit schema
+                        table = pa.Table.from_pandas(df, schema=schema)
+                        
+                        # Write chunk
                         writer.write_table(table)
                         
                         # Update progress
-                        pbar.update(chunk_size)
+                        pbar.update(1)
                         
                         # Clean up memory
+                        del df, table, chunk_data
                         self._cleanup_memory()
             
-            generation_time = time.time() - start_time
+            # Record performance metrics
             file_size = output_file.stat().st_size
+            self.performance_metrics['file_sizes'].append(file_size)
+            self.performance_metrics['memory_usage'].append(psutil.Process().memory_info().rss)
             
-            # Record metrics
-            self._record_performance_metrics(file_size, generation_time)
-            
-            logger.info(f"Parquet file generated: {output_file}")
-            logger.info(f"Size: {file_size/1024/1024:.2f}MB")
-            logger.info(f"Time: {generation_time:.2f}s")
-            
-            return str(output_file)
+            logger.info(f"Successfully generated Parquet file: {output_file}")
+            logger.info(f"File size: {file_size/1024/1024:.2f}MB")
             
         except Exception as e:
             logger.error(f"Error generating Parquet file: {str(e)}")
