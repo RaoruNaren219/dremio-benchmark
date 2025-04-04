@@ -75,27 +75,73 @@ def check_version_compatibility() -> None:
 # Check version compatibility at startup
 check_version_compatibility()
 
+class Config:
+    """Configuration management class."""
+    
+    def __init__(self):
+        """Initialize configuration with environment variables."""
+        self.load_env()
+        self.validate_env()
+        
+    def load_env(self) -> None:
+        """Load environment variables from .env file."""
+        load_dotenv()
+        self.dremio_url = os.getenv('DREMIO_URL')
+        self.dremio_username = os.getenv('DREMIO_USERNAME')
+        self.dremio_password = os.getenv('DREMIO_PASSWORD')
+        self.dremio_space = os.getenv('DREMIO_SPACE', 'test_data')
+        self.chunk_size = int(os.getenv('CHUNK_SIZE', '1048576'))  # Default 1MB
+        self.max_retries = int(os.getenv('MAX_RETRIES', '3'))
+        self.retry_delay = int(os.getenv('RETRY_DELAY', '5'))
+        self.min_memory = int(os.getenv('MIN_MEMORY', '2147483648'))  # Default 2GB
+        
+    def validate_env(self) -> None:
+        """Validate required environment variables."""
+        required_vars = {
+            'DREMIO_URL': self.dremio_url,
+            'DREMIO_USERNAME': self.dremio_username,
+            'DREMIO_PASSWORD': self.dremio_password
+        }
+        
+        missing_vars = [var for var, value in required_vars.items() if not value]
+        if missing_vars:
+            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+            
+        # Validate URL format
+        if not self.dremio_url.startswith(('http://', 'https://')):
+            raise ValueError("DREMIO_URL must start with http:// or https://")
+            
+        # Validate numeric values
+        if self.chunk_size < 1024 * 1024:  # Less than 1MB
+            raise ValueError("CHUNK_SIZE must be at least 1MB")
+        if self.max_retries < 1:
+            raise ValueError("MAX_RETRIES must be at least 1")
+        if self.retry_delay < 1:
+            raise ValueError("RETRY_DELAY must be at least 1 second")
+        if self.min_memory < 1024 * 1024 * 1024:  # Less than 1GB
+            raise ValueError("MIN_MEMORY must be at least 1GB")
+
 class DremioIngester:
     """A class for ingesting data into Dremio with memory optimization."""
     
-    def __init__(self, dremio_url: str, username: str, password: str, source_dremio_url: str = None):
-        """Initialize the DremioIngester."""
-        self.dremio_url = dremio_url.rstrip('/')
-        self.username = username
-        self.password = password
-        self.source_dremio_url = source_dremio_url
+    def __init__(self, config: Config):
+        """Initialize the DremioIngester with configuration."""
+        self.config = config
+        self.dremio_url = config.dremio_url.rstrip('/')
+        self.username = config.dremio_username
+        self.password = config.dremio_password
         self.session = self._create_session()
         self.available_memory = None
-        self.min_required_memory = 2 * 1024 * 1024 * 1024  # 2GB minimum
+        self.min_required_memory = config.min_memory
         self.performance_metrics = {
             'file_sizes': [],
             'ingestion_times': [],
             'memory_usage': []
         }
-        self.max_retries = 3
-        self.retry_delay = 5  # seconds
+        self.max_retries = config.max_retries
+        self.retry_delay = config.retry_delay
         
-        # Initialize supported formats
+        # Initialize supported formats with validation
         self.supported_formats = {
             'csv': {'extensions': ['.csv'], 'mime_type': 'text/csv'},
             'txt': {'extensions': ['.txt'], 'mime_type': 'text/plain'},
@@ -183,14 +229,30 @@ class DremioIngester:
             raise
 
     def _cleanup_memory(self) -> None:
-        """Clean up memory and force garbage collection for 64-bit system."""
-        gc.collect()
-        current_memory = psutil.Process().memory_info().rss
-        if current_memory > self.available_memory * 0.8:  # If using more than 80% of available memory
-            logger.warning(f"High memory usage detected: {current_memory/1024/1024/1024:.2f}GB")
-            gc.collect(2)  # Force garbage collection with generation 2 objects
-            gc.collect(1)  # Also collect generation 1 objects
-            gc.collect(0)  # And generation 0 objects
+        """Clean up memory and force garbage collection."""
+        try:
+            # Get initial memory usage
+            initial_memory = psutil.Process().memory_info().rss
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear any cached data
+            if hasattr(pd, '_cache'):
+                pd._cache.clear()
+            
+            # Get final memory usage
+            final_memory = psutil.Process().memory_info().rss
+            freed_memory = initial_memory - final_memory
+            
+            if freed_memory > 0:
+                logger.info(f"Memory cleanup freed {freed_memory/1024/1024:.2f}MB")
+            else:
+                logger.warning("Memory cleanup did not free any memory")
+                
+        except Exception as e:
+            logger.error(f"Error during memory cleanup: {str(e)}")
+            raise
 
     def _validate_file_format(self, file_path: str) -> str:
         """
@@ -207,10 +269,38 @@ class DremioIngester:
         """
         try:
             file_ext = Path(file_path).suffix.lower()
+            
+            # First check by extension
             for fmt, info in self.supported_formats.items():
                 if file_ext in info['extensions']:
+                    # For parquet files, verify the format
+                    if fmt == 'parquet':
+                        try:
+                            pq.read_table(file_path)
+                            return fmt
+                        except Exception as e:
+                            raise ValueError(f"Invalid Parquet file format: {str(e)}")
                     return fmt
-            raise ValueError(f"Unsupported file format: {file_ext}")
+            
+            # If extension doesn't match, try to detect format
+            try:
+                # Try reading as Parquet
+                pq.read_table(file_path)
+                return 'parquet'
+            except:
+                try:
+                    # Try reading as CSV
+                    pd.read_csv(file_path, nrows=1)
+                    return 'csv'
+                except:
+                    try:
+                        # Try reading as text
+                        with open(file_path, 'r') as f:
+                            f.readline()
+                        return 'txt'
+                    except:
+                        raise ValueError(f"Unsupported file format: {file_ext}")
+                        
         except Exception as e:
             logger.error(f"File format validation failed: {str(e)}")
             raise
@@ -234,6 +324,26 @@ class DremioIngester:
                     raise ValueError("File is empty")
                 if len(df.columns) != 10:  # Expected number of columns
                     raise ValueError(f"Invalid number of columns: {len(df.columns)}")
+                
+                # Check data types
+                expected_types = {
+                    'id': np.int64,
+                    'name': str,
+                    'email': str,
+                    'age': np.int64,
+                    'salary': np.float64,
+                    'department': str,
+                    'hire_date': str,
+                    'active': bool,
+                    'performance_score': np.float64,
+                    'last_review_date': str
+                }
+                
+                for col, expected_type in expected_types.items():
+                    if col not in df.columns:
+                        raise ValueError(f"Missing required column: {col}")
+                    if not pd.api.types.is_dtype_equal(df[col].dtype, expected_type):
+                        raise ValueError(f"Invalid data type for column {col}: expected {expected_type}, got {df[col].dtype}")
             
             elif fmt == 'parquet':
                 # Check Parquet file structure
@@ -242,6 +352,23 @@ class DremioIngester:
                     raise ValueError("File is empty")
                 if len(table.column_names) != 10:  # Expected number of columns
                     raise ValueError(f"Invalid number of columns: {len(table.column_names)}")
+                
+                # Check schema
+                expected_schema = pa.schema([
+                    ('id', pa.int64()),
+                    ('name', pa.string()),
+                    ('email', pa.string()),
+                    ('age', pa.int64()),
+                    ('salary', pa.float64()),
+                    ('department', pa.string()),
+                    ('hire_date', pa.string()),
+                    ('active', pa.bool_()),
+                    ('performance_score', pa.float64()),
+                    ('last_review_date', pa.string())
+                ])
+                
+                if not table.schema.equals(expected_schema):
+                    raise ValueError("Invalid schema in Parquet file")
             
             logger.info(f"File integrity check passed for {file_path}")
             
@@ -250,16 +377,20 @@ class DremioIngester:
             raise
 
     def _record_performance_metrics(self, file_size: int, ingestion_time: float) -> None:
-        """
-        Record performance metrics for analysis.
-        
-        Args:
-            file_size: Size of the ingested file in bytes
-            ingestion_time: Time taken to ingest the file in seconds
-        """
-        self.performance_metrics['file_sizes'].append(file_size)
-        self.performance_metrics['ingestion_times'].append(ingestion_time)
-        self.performance_metrics['memory_usage'].append(psutil.Process().memory_info().rss)
+        """Record performance metrics for analysis."""
+        try:
+            current_memory = psutil.Process().memory_info().rss
+            self.performance_metrics['file_sizes'].append(file_size)
+            self.performance_metrics['ingestion_times'].append(ingestion_time)
+            self.performance_metrics['memory_usage'].append(current_memory)
+            
+            # Calculate and log ingestion speed
+            speed = file_size / (1024 * 1024 * ingestion_time)  # MB/s
+            logger.info(f"Ingestion speed: {speed:.2f}MB/s")
+            
+        except Exception as e:
+            logger.error(f"Error recording performance metrics: {str(e)}")
+            # Don't raise the exception as this is not critical
 
     def _print_performance_summary(self) -> None:
         """Print a summary of performance metrics."""
@@ -277,9 +408,41 @@ class DremioIngester:
         logger.info("\nPerformance Summary:")
         logger.info(tabulate(summary.items(), headers=['Metric', 'Value'], tablefmt='grid'))
 
+    def _validate_file_path(self, file_path: str) -> None:
+        """Validate file path and existence."""
+        if not file_path or not isinstance(file_path, str):
+            raise ValueError("File path must be a non-empty string")
+            
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        if not path.is_file():
+            raise ValueError(f"Path is not a file: {file_path}")
+        if not os.access(file_path, os.R_OK):
+            raise PermissionError(f"No read permission for file: {file_path}")
+
+    def _validate_space_name(self, space_name: str) -> None:
+        """Validate Dremio space name."""
+        if not space_name or not isinstance(space_name, str):
+            raise ValueError("Space name must be a non-empty string")
+        if not space_name.isalnum() and '_' not in space_name:
+            raise ValueError("Space name must contain only alphanumeric characters and underscores")
+
+    def _validate_table_name(self, table_name: str) -> None:
+        """Validate table name."""
+        if not table_name or not isinstance(table_name, str):
+            raise ValueError("Table name must be a non-empty string")
+        if not table_name.isalnum() and '_' not in table_name:
+            raise ValueError("Table name must contain only alphanumeric characters and underscores")
+
     def ingest_file(self, file_path: str, space_name: str, table_name: str) -> bool:
-        """Ingest a file into Dremio with chunked upload and memory monitoring."""
+        """Ingest a file into Dremio with enhanced validation and error handling."""
         try:
+            # Validate inputs
+            self._validate_file_path(file_path)
+            self._validate_space_name(space_name)
+            self._validate_table_name(table_name)
+            
             # Validate file and format
             fmt = self._validate_file_format(file_path)
             self._validate_file_integrity(file_path, fmt)
@@ -307,12 +470,16 @@ class DremioIngester:
                         if not chunk:
                             break
                             
-                        response = self._make_request(
-                            'POST',
-                            f"/api/v3/dataset/{space_name}/{table_name}",
-                            headers=headers,
-                            data=chunk
-                        )
+                        try:
+                            response = self._make_request(
+                                'POST',
+                                f"/api/v3/dataset/{space_name}/{table_name}",
+                                headers=headers,
+                                data=chunk
+                            )
+                        except requests.exceptions.RequestException as e:
+                            logger.error(f"Failed to upload chunk: {str(e)}")
+                            raise
                         
                         # Update progress
                         chunk_len = len(chunk)
@@ -334,59 +501,91 @@ class DremioIngester:
             
             return True
             
+        except (ValueError, FileNotFoundError, PermissionError) as e:
+            logger.error(f"Validation error: {str(e)}")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error: {str(e)}")
+            return False
+        except MemoryError as e:
+            logger.error(f"Memory error: {str(e)}")
+            return False
         except Exception as e:
-            logger.error(f"Error ingesting file: {str(e)}")
+            logger.error(f"Unexpected error ingesting file: {str(e)}")
             return False
 
     def _calculate_optimal_chunk_size(self, file_size: int) -> int:
         """Calculate optimal chunk size based on available memory and file size."""
-        available_memory = psutil.virtual_memory().available
-        chunk_size = min(
-            file_size,  # Don't make chunks larger than file
-            available_memory // 4,  # Use at most 1/4 of available memory
-            8 * 1024 * 1024  # Cap at 8MB
-        )
-        return max(chunk_size, 1024 * 1024)  # Minimum 1MB chunk size
+        try:
+            available_memory = psutil.virtual_memory().available
+            total_memory = psutil.virtual_memory().total
+            
+            # Calculate base chunk size (1% of total memory or 8MB, whichever is smaller)
+            base_chunk_size = min(total_memory // 100, 8 * 1024 * 1024)
+            
+            # Adjust based on available memory
+            if available_memory < total_memory * 0.3:  # Less than 30% memory available
+                chunk_size = min(base_chunk_size // 2, file_size)
+            else:
+                chunk_size = min(base_chunk_size, file_size)
+            
+            # Ensure minimum chunk size
+            chunk_size = max(chunk_size, 1024 * 1024)  # Minimum 1MB
+            
+            logger.debug(f"Calculated chunk size: {chunk_size/1024/1024:.2f}MB")
+            return chunk_size
+            
+        except Exception as e:
+            logger.error(f"Error calculating chunk size: {str(e)}")
+            return 1024 * 1024  # Default to 1MB on error
 
     def _monitor_memory_usage(self) -> None:
         """Monitor memory usage and trigger cleanup if needed."""
-        current_memory = psutil.Process().memory_info().rss
-        available_memory = psutil.virtual_memory().available
-        
-        # If using more than 75% of available memory, trigger cleanup
-        if current_memory > available_memory * 0.75:
-            logger.warning(f"High memory usage detected: {current_memory/1024/1024/1024:.2f}GB")
-            self._cleanup_memory()
+        try:
+            current_memory = psutil.Process().memory_info().rss
+            available_memory = psutil.virtual_memory().available
+            total_memory = psutil.virtual_memory().total
             
-        # If still using too much memory after cleanup, raise error
-        if current_memory > available_memory * 0.9:
-            raise MemoryError(f"Memory usage too high: {current_memory/1024/1024/1024:.2f}GB")
+            # Calculate memory usage percentage
+            memory_percent = (current_memory / total_memory) * 100
+            
+            # Log memory usage if it's high
+            if memory_percent > 70:
+                logger.warning(f"High memory usage detected: {memory_percent:.1f}% ({current_memory/1024/1024/1024:.2f}GB)")
+            
+            # If using more than 75% of available memory, trigger cleanup
+            if current_memory > available_memory * 0.75:
+                logger.warning("Memory usage threshold exceeded, triggering cleanup")
+                self._cleanup_memory()
+                
+            # If still using too much memory after cleanup, raise error
+            if current_memory > available_memory * 0.9:
+                raise MemoryError(f"Memory usage too high: {memory_percent:.1f}% ({current_memory/1024/1024/1024:.2f}GB)")
+                
+        except Exception as e:
+            logger.error(f"Error monitoring memory usage: {str(e)}")
+            raise
 
 def main() -> None:
     """Main function to ingest test data into Dremio with robust error handling."""
     ingester = None
+    start_time = time.time()
+    
     try:
-        # Load and validate environment variables
-        load_dotenv()
-        env_vars = {
-            'DREMIO_URL': os.getenv('DREMIO_URL'),
-            'DREMIO_USERNAME': os.getenv('DREMIO_USERNAME'),
-            'DREMIO_PASSWORD': os.getenv('DREMIO_PASSWORD'),
-            'DREMIO_SPACE': os.getenv('DREMIO_SPACE', 'test_data')
-        }
-        
-        # Validate required environment variables
-        missing_vars = [var for var, value in env_vars.items() if not value and var != 'DREMIO_SPACE']
-        if missing_vars:
-            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
+        # Initialize configuration
+        logger.info(f"{Fore.CYAN}Loading configuration...{Style.RESET_ALL}")
+        try:
+            config = Config()
+        except ValueError as e:
+            logger.error(f"Configuration error: {str(e)}")
+            sys.exit(1)
         
         # Create ingester with progress tracking
         logger.info(f"{Fore.CYAN}Initializing Dremio ingester...{Style.RESET_ALL}")
-        ingester = DremioIngester(
-            env_vars['DREMIO_URL'],
-            env_vars['DREMIO_USERNAME'],
-            env_vars['DREMIO_PASSWORD']
-        )
+        try:
+            ingester = DremioIngester(config)
+        except Exception as e:
+            raise ConnectionError(f"Failed to initialize Dremio ingester: {str(e)}")
         
         # Get and validate test data directory
         test_data_dir = Path("test_data")
@@ -402,37 +601,51 @@ def main() -> None:
         total_files = len(files)
         successful_ingestions = 0
         failed_ingestions = []
+        total_size = sum(f.stat().st_size for f in files)
         
         # Process each file with progress tracking
-        logger.info(f"\n{Fore.CYAN}Starting ingestion of {total_files} files...{Style.RESET_ALL}")
+        logger.info(f"\n{Fore.CYAN}Starting ingestion of {total_files} files (Total size: {total_size/1024/1024:.2f}MB)...{Style.RESET_ALL}")
+        
         for index, file_path in enumerate(files, 1):
-            try:
-                logger.info(f"\n{Fore.CYAN}[{index}/{total_files}] Ingesting {file_path.name}...{Style.RESET_ALL}")
-                
-                # Attempt ingestion with retry logic
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        if ingester.ingest_file(str(file_path), env_vars['DREMIO_SPACE'], file_path.stem):
-                            successful_ingestions += 1
-                            break
-                    except Exception as e:
-                        if attempt == max_retries - 1:
-                            raise
-                        logger.warning(f"Attempt {attempt + 1} failed, retrying...")
-                        time.sleep(5)  # Wait before retry
-                
-            except Exception as e:
-                error_msg = f"Failed to ingest {file_path.name}: {str(e)}"
-                logger.error(error_msg)
-                failed_ingestions.append((file_path.name, str(e)))
-                continue
+            file_size = file_path.stat().st_size
+            logger.info(f"\n{Fore.CYAN}[{index}/{total_files}] Ingesting {file_path.name} ({file_size/1024/1024:.2f}MB)...{Style.RESET_ALL}")
+            
+            # Attempt ingestion with retry logic
+            max_retries = config.max_retries
+            for attempt in range(max_retries):
+                try:
+                    if ingester.ingest_file(str(file_path), config.dremio_space, file_path.stem):
+                        successful_ingestions += 1
+                        break
+                    elif attempt == max_retries - 1:
+                        raise Exception("Maximum retry attempts reached")
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        error_msg = f"Failed to ingest {file_path.name}: {str(e)}"
+                        logger.error(error_msg)
+                        failed_ingestions.append((file_path.name, str(e)))
+                    else:
+                        logger.warning(f"Attempt {attempt + 1} failed, retrying in {config.retry_delay} seconds...")
+                        time.sleep(config.retry_delay)
+            
+            # Clean up memory after each file
+            if ingester:
+                ingester._cleanup_memory()
+        
+        # Calculate overall statistics
+        total_time = time.time() - start_time
+        total_processed = successful_ingestions + len(failed_ingestions)
+        success_rate = (successful_ingestions / total_processed * 100) if total_processed > 0 else 0
+        avg_speed = total_size / (1024 * 1024 * total_time) if total_time > 0 else 0  # MB/s
         
         # Print final summary
         logger.info(f"\n{Fore.GREEN}Ingestion Summary:{Style.RESET_ALL}")
-        logger.info(f"Total files processed: {total_files}")
+        logger.info(f"Total time: {total_time:.2f}s")
+        logger.info(f"Total files processed: {total_processed}")
         logger.info(f"Successfully ingested: {successful_ingestions}")
         logger.info(f"Failed ingestions: {len(failed_ingestions)}")
+        logger.info(f"Success rate: {success_rate:.1f}%")
+        logger.info(f"Average ingestion speed: {avg_speed:.2f}MB/s")
         
         if failed_ingestions:
             logger.info("\nFailed ingestions details:")
@@ -442,6 +655,10 @@ def main() -> None:
         # Print performance metrics if available
         if ingester:
             ingester._print_performance_summary()
+        
+        # Exit with appropriate status code
+        if failed_ingestions:
+            sys.exit(1)
         
     except Exception as e:
         logger.error(f"Critical error in main function: {str(e)}")
