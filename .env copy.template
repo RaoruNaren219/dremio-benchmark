@@ -1,0 +1,45 @@
+# Dremio Connection Settings
+TARGET_DREMIO_URL=http://your-dremio1-host:9047  # Main cluster where data will be ingested
+SOURCE_DREMIO_URL=http://your-dremio2-host:9047  # Source cluster for data sharing (optional)
+DREMIO_USERNAME=your_username
+DREMIO_PASSWORD=your_password
+
+# Data Generation Settings
+DATA_DIR=test_data
+CHUNK_SIZE=100000
+NUM_ROWS=1000000
+
+# Logging Settings
+LOG_LEVEL=INFO
+LOG_FILE=data_generation.log
+
+# Performance Settings
+MEMORY_LIMIT=2GB
+DISK_SPACE_LIMIT=10GB
+
+# Legacy Configuration (for reference only)
+# Main Cluster (Target) Configuration
+DREMIO1_URL=${TARGET_DREMIO_URL}
+DREMIO1_USERNAME=${DREMIO_USERNAME}
+DREMIO1_PASSWORD=${DREMIO_PASSWORD}
+
+# Source Cluster Configuration
+DREMIO2_URL=${SOURCE_DREMIO_URL}
+DREMIO2_USERNAME=${DREMIO_USERNAME}
+DREMIO2_PASSWORD=${DREMIO_PASSWORD}
+
+# Source Configuration
+DREMIO2_SOURCE_NAME=dremio2_source  # The name of source Dremio as configured in target Dremio's sources
+
+# TPC-DS Configuration
+TPCDS_SCALE_FACTORS=1,10,100  # Comma-separated list of scale factors to generate
+TPCDS_DATA_DIR=/tpcds_data    # Base directory for generated data
+TPCDS_PARQUET_DIR=/tpcds_parquet  # Base directory for Parquet files
+
+# Hadoop Configuration
+HADOOP_HOME=/path/to/hadoop
+HADOOP_CONF_DIR=/path/to/hadoop/conf
+HDFS_USER=hdfs  # User for HDFS operations
+
+# Data Ingestion Configuration
+DREMIO_SPACE=test_data  # Space name for ingested data 

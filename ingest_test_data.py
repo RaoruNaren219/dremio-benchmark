@@ -79,21 +79,12 @@ class DremioIngester:
     """A class for ingesting data into Dremio with memory optimization."""
     
     def __init__(self, dremio_url: str, username: str, password: str, source_dremio_url: str = None):
-        """
-        Initialize the DremioIngester.
-        
-        Args:
-            dremio_url: URL of the target Dremio server
-            username: Dremio username
-            password: Dremio password
-            source_dremio_url: URL of the source Dremio instance for data sharing
-        """
+        """Initialize the DremioIngester."""
         self.dremio_url = dremio_url.rstrip('/')
         self.username = username
         self.password = password
         self.source_dremio_url = source_dremio_url
-        self.session = requests.Session()
-        self.session.auth = (username, password)
+        self.session = self._create_session()
         self.available_memory = None
         self.min_required_memory = 2 * 1024 * 1024 * 1024  # 2GB minimum
         self.performance_metrics = {
@@ -101,9 +92,8 @@ class DremioIngester:
             'ingestion_times': [],
             'memory_usage': []
         }
-        
-        # Check system resources
-        self._check_system_resources()
+        self.max_retries = 3
+        self.retry_delay = 5  # seconds
         
         # Initialize supported formats
         self.supported_formats = {
@@ -111,12 +101,67 @@ class DremioIngester:
             'txt': {'extensions': ['.txt'], 'mime_type': 'text/plain'},
             'parquet': {'extensions': ['.parquet'], 'mime_type': 'application/x-parquet'}
         }
+        
+        # Verify connection and resources
+        self._check_system_resources()
+        self._verify_dremio_connection()
 
-        # Log Dremio instance information
-        logger.info(f"Target Dremio instance: {self.dremio_url}")
-        if self.source_dremio_url:
-            logger.info(f"Source Dremio instance: {self.source_dremio_url}")
-            logger.info("Data sharing mode enabled")
+    def _create_session(self) -> requests.Session:
+        """Create and configure requests session with proper headers and auth."""
+        session = requests.Session()
+        session.auth = (self.username, self.password)
+        session.headers.update({
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        })
+        return session
+
+    def _verify_dremio_connection(self) -> None:
+        """Verify connection to Dremio with retry logic."""
+        for attempt in range(self.max_retries):
+            try:
+                self._check_dremio_connection()
+                return
+            except ConnectionError as e:
+                if attempt == self.max_retries - 1:
+                    raise ConnectionError(f"Failed to connect to Dremio after {self.max_retries} attempts: {str(e)}")
+                logger.warning(f"Connection attempt {attempt + 1} failed, retrying in {self.retry_delay} seconds...")
+                time.sleep(self.retry_delay)
+
+    def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
+        """Make HTTP request with retry logic and error handling."""
+        url = f"{self.dremio_url}{endpoint}"
+        for attempt in range(self.max_retries):
+            try:
+                response = self.session.request(method, url, **kwargs)
+                response.raise_for_status()
+                return response
+            except requests.exceptions.RequestException as e:
+                if attempt == self.max_retries - 1:
+                    raise ConnectionError(f"Request failed after {self.max_retries} attempts: {str(e)}")
+                logger.warning(f"Request attempt {attempt + 1} failed, retrying in {self.retry_delay} seconds...")
+                time.sleep(self.retry_delay)
+
+    def _check_dremio_connection(self) -> None:
+        """Check connection to Dremio instance and verify data sharing capabilities."""
+        try:
+            # Check target Dremio connection
+            response = self._make_request('GET', '/api/v3/info')
+            
+            # If source Dremio is specified, check data sharing capabilities
+            if self.source_dremio_url:
+                source_session = requests.Session()
+                source_session.auth = (self.username, self.password)
+                source_response = source_session.get(f"{self.source_dremio_url}/api/v3/info")
+                if source_response.status_code != 200:
+                    raise ConnectionError(f"Failed to connect to source Dremio instance: {source_response.text}")
+                
+                logger.info("Successfully verified both Dremio instances")
+                logger.info("Data sharing capabilities confirmed")
+            
+        except Exception as e:
+            logger.error(f"Dremio connection check failed: {str(e)}")
+            raise
 
     def _check_system_resources(self) -> None:
         """
@@ -232,75 +277,51 @@ class DremioIngester:
         logger.info("\nPerformance Summary:")
         logger.info(tabulate(summary.items(), headers=['Metric', 'Value'], tablefmt='grid'))
 
-    def _check_dremio_connection(self) -> None:
-        """
-        Check connection to Dremio instance and verify data sharing capabilities.
-        
-        Raises:
-            ConnectionError: If connection to Dremio fails
-        """
-        try:
-            # Check target Dremio connection
-            response = self.session.get(f"{self.dremio_url}/api/v3/info")
-            if response.status_code != 200:
-                raise ConnectionError(f"Failed to connect to target Dremio instance: {response.text}")
-            
-            # If source Dremio is specified, check data sharing capabilities
-            if self.source_dremio_url:
-                source_session = requests.Session()
-                source_session.auth = (self.username, self.password)
-                source_response = source_session.get(f"{self.source_dremio_url}/api/v3/info")
-                if source_response.status_code != 200:
-                    raise ConnectionError(f"Failed to connect to source Dremio instance: {source_response.text}")
-                
-                logger.info("Successfully verified both Dremio instances")
-                logger.info("Data sharing capabilities confirmed")
-            
-        except Exception as e:
-            logger.error(f"Dremio connection check failed: {str(e)}")
-            raise
-
     def ingest_file(self, file_path: str, space_name: str, table_name: str) -> bool:
-        """
-        Ingest a file into Dremio.
-        
-        Args:
-            file_path: Path to the file to ingest
-            space_name: Name of the Dremio space to ingest into
-            table_name: Name of the table to create in the space
-            
-        Returns:
-            True if ingestion was successful, False otherwise
-        """
+        """Ingest a file into Dremio with chunked upload and memory monitoring."""
         try:
-            # Check Dremio connection and data sharing capabilities
-            self._check_dremio_connection()
-            
-            # Validate file format
+            # Validate file and format
             fmt = self._validate_file_format(file_path)
-            
-            # Validate file integrity
             self._validate_file_integrity(file_path, fmt)
             
             # Start ingestion
             start_time = time.time()
             file_size = Path(file_path).stat().st_size
+            chunk_size = self._calculate_optimal_chunk_size(file_size)
             
             # Prepare ingestion request
             headers = {
                 'Content-Type': self.supported_formats[fmt]['mime_type']
             }
             
-            # Upload file
+            # Upload file in chunks with memory monitoring
             with open(file_path, 'rb') as f:
-                response = self.session.post(
-                    f"{self.dremio_url}/api/v3/dataset/{space_name}/{table_name}",
-                    headers=headers,
-                    data=f
-                )
-            
-            if response.status_code != 200:
-                raise Exception(f"Failed to ingest file: {response.text}")
+                uploaded_size = 0
+                with tqdm(total=file_size, unit='B', unit_scale=True) as pbar:
+                    while uploaded_size < file_size:
+                        # Check memory usage before reading chunk
+                        self._monitor_memory_usage()
+                        
+                        # Read and upload chunk
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                            
+                        response = self._make_request(
+                            'POST',
+                            f"/api/v3/dataset/{space_name}/{table_name}",
+                            headers=headers,
+                            data=chunk
+                        )
+                        
+                        # Update progress
+                        chunk_len = len(chunk)
+                        uploaded_size += chunk_len
+                        pbar.update(chunk_len)
+                        
+                        # Clean up memory after chunk upload
+                        del chunk
+                        self._cleanup_memory()
             
             ingestion_time = time.time() - start_time
             
@@ -317,48 +338,121 @@ class DremioIngester:
             logger.error(f"Error ingesting file: {str(e)}")
             return False
 
+    def _calculate_optimal_chunk_size(self, file_size: int) -> int:
+        """Calculate optimal chunk size based on available memory and file size."""
+        available_memory = psutil.virtual_memory().available
+        chunk_size = min(
+            file_size,  # Don't make chunks larger than file
+            available_memory // 4,  # Use at most 1/4 of available memory
+            8 * 1024 * 1024  # Cap at 8MB
+        )
+        return max(chunk_size, 1024 * 1024)  # Minimum 1MB chunk size
+
+    def _monitor_memory_usage(self) -> None:
+        """Monitor memory usage and trigger cleanup if needed."""
+        current_memory = psutil.Process().memory_info().rss
+        available_memory = psutil.virtual_memory().available
+        
+        # If using more than 75% of available memory, trigger cleanup
+        if current_memory > available_memory * 0.75:
+            logger.warning(f"High memory usage detected: {current_memory/1024/1024/1024:.2f}GB")
+            self._cleanup_memory()
+            
+        # If still using too much memory after cleanup, raise error
+        if current_memory > available_memory * 0.9:
+            raise MemoryError(f"Memory usage too high: {current_memory/1024/1024/1024:.2f}GB")
+
 def main() -> None:
-    """Main function to ingest test data into Dremio."""
+    """Main function to ingest test data into Dremio with robust error handling."""
+    ingester = None
     try:
-        # Load environment variables
+        # Load and validate environment variables
         load_dotenv()
+        env_vars = {
+            'DREMIO_URL': os.getenv('DREMIO_URL'),
+            'DREMIO_USERNAME': os.getenv('DREMIO_USERNAME'),
+            'DREMIO_PASSWORD': os.getenv('DREMIO_PASSWORD'),
+            'DREMIO_SPACE': os.getenv('DREMIO_SPACE', 'test_data')
+        }
         
-        # Get Dremio credentials
-        target_dremio_url = os.getenv('TARGET_DREMIO_URL')
-        source_dremio_url = os.getenv('SOURCE_DREMIO_URL')
-        username = os.getenv('DREMIO_USERNAME')
-        password = os.getenv('DREMIO_PASSWORD')
+        # Validate required environment variables
+        missing_vars = [var for var, value in env_vars.items() if not value and var != 'DREMIO_SPACE']
+        if missing_vars:
+            raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
         
-        if not all([target_dremio_url, username, password]):
-            raise ValueError("Missing required environment variables")
+        # Create ingester with progress tracking
+        logger.info(f"{Fore.CYAN}Initializing Dremio ingester...{Style.RESET_ALL}")
+        ingester = DremioIngester(
+            env_vars['DREMIO_URL'],
+            env_vars['DREMIO_USERNAME'],
+            env_vars['DREMIO_PASSWORD']
+        )
         
-        # Create ingester
-        ingester = DremioIngester(target_dremio_url, username, password, source_dremio_url)
-        
-        # Get list of files to ingest
+        # Get and validate test data directory
         test_data_dir = Path("test_data")
         if not test_data_dir.exists():
-            raise FileNotFoundError("Test data directory not found")
+            raise FileNotFoundError(f"Test data directory not found: {test_data_dir}")
         
+        # Get list of files to ingest
         files = list(test_data_dir.glob("*.*"))
         if not files:
-            raise FileNotFoundError("No files found in test data directory")
+            raise FileNotFoundError(f"No files found in test data directory: {test_data_dir}")
         
-        # Ingest each file
-        for file_path in files:
-            logger.info(f"\n{Fore.CYAN}Ingesting {file_path.name} from source to target Dremio...{Style.RESET_ALL}")
+        # Track overall progress
+        total_files = len(files)
+        successful_ingestions = 0
+        failed_ingestions = []
+        
+        # Process each file with progress tracking
+        logger.info(f"\n{Fore.CYAN}Starting ingestion of {total_files} files...{Style.RESET_ALL}")
+        for index, file_path in enumerate(files, 1):
             try:
-                ingester.ingest_file(str(file_path), "test_space", file_path.stem)
+                logger.info(f"\n{Fore.CYAN}[{index}/{total_files}] Ingesting {file_path.name}...{Style.RESET_ALL}")
+                
+                # Attempt ingestion with retry logic
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        if ingester.ingest_file(str(file_path), env_vars['DREMIO_SPACE'], file_path.stem):
+                            successful_ingestions += 1
+                            break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            raise
+                        logger.warning(f"Attempt {attempt + 1} failed, retrying...")
+                        time.sleep(5)  # Wait before retry
+                
             except Exception as e:
-                logger.error(f"Failed to ingest {file_path.name}: {str(e)}")
+                error_msg = f"Failed to ingest {file_path.name}: {str(e)}"
+                logger.error(error_msg)
+                failed_ingestions.append((file_path.name, str(e)))
                 continue
         
-        # Print performance summary
-        ingester._print_performance_summary()
+        # Print final summary
+        logger.info(f"\n{Fore.GREEN}Ingestion Summary:{Style.RESET_ALL}")
+        logger.info(f"Total files processed: {total_files}")
+        logger.info(f"Successfully ingested: {successful_ingestions}")
+        logger.info(f"Failed ingestions: {len(failed_ingestions)}")
+        
+        if failed_ingestions:
+            logger.info("\nFailed ingestions details:")
+            for file_name, error in failed_ingestions:
+                logger.info(f"- {file_name}: {error}")
+        
+        # Print performance metrics if available
+        if ingester:
+            ingester._print_performance_summary()
         
     except Exception as e:
-        logger.error(f"Error in main function: {str(e)}")
+        logger.error(f"Critical error in main function: {str(e)}")
         sys.exit(1)
+    finally:
+        # Cleanup
+        if ingester:
+            try:
+                ingester._cleanup_memory()
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup: {str(cleanup_error)}")
 
 if __name__ == "__main__":
     main() 
