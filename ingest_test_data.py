@@ -154,13 +154,17 @@ class DremioIngester:
 
     def _create_session(self) -> requests.Session:
         """Create and configure requests session with proper headers and auth."""
-        session = requests.Session()
-        session.auth = (self.username, self.password)
-        session.headers.update({
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        })
-        return session
+        try:
+            session = requests.Session()
+            session.auth = (self.username, self.password)
+            session.headers.update({
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            })
+            return session
+        except Exception as e:
+            logger.error(f"Failed to create session: {str(e)}")
+            raise
 
     def _verify_dremio_connection(self) -> None:
         """Verify connection to Dremio with retry logic."""
