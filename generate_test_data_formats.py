@@ -107,14 +107,14 @@ class DataGenerator:
         self.dtypes = {
             'id': np.int64,
             'name': str,
+            'email': str,
             'age': np.int32,
             'salary': np.float64,
             'department': str,
-            'hire_date': str,
+            'hire_date': 'datetime64[ns]',
             'is_active': bool,
-            'performance_score': np.float32,
-            'years_of_service': np.int32,
-            'bonus': np.float64
+            'performance_score': np.float64,
+            'last_review_date': 'datetime64[ns]'
         }
 
         # Log source Dremio information
@@ -215,15 +215,15 @@ class DataGenerator:
             # Pre-allocate arrays for better memory efficiency
             data = {
                 'id': np.arange(start_idx, start_idx + size, dtype=np.int64),
-                'name': np.array([f"Employee_{i}" for i in range(start_idx, start_idx + size)]),
-                'age': np.random.randint(22, 65, size=size, dtype=np.int32),
-                'salary': np.random.uniform(30000, 150000, size=size).astype(np.float64),
-                'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing', 'Sales'], size=size),
-                'hire_date': pd.date_range(start='2020-01-01', periods=size, freq='D').strftime('%Y-%m-%d'),
+                'name': [f"User_{j}" for j in range(start_idx, start_idx + size)],
+                'email': [f"user_{j}@example.com" for j in range(start_idx, start_idx + size)],
+                'age': np.random.randint(18, 65, size=size, dtype=np.int32),
+                'salary': np.random.uniform(30000, 120000, size=size).astype(np.float64),
+                'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing'], size=size),
+                'hire_date': pd.date_range(start='2020-01-01', periods=size, freq='D'),
                 'is_active': np.random.choice([True, False], size=size),
-                'performance_score': np.random.uniform(0, 1, size=size).astype(np.float32),
-                'years_of_service': np.random.randint(0, 20, size=size, dtype=np.int32),
-                'bonus': np.random.uniform(0, 50000, size=size).astype(np.float64)
+                'performance_score': np.random.uniform(1, 5, size=size).astype(np.float64),
+                'last_review_date': pd.date_range(start='2021-01-01', periods=size, freq='D')
             }
             
             # Create DataFrame with optimized memory usage
@@ -363,13 +363,16 @@ class DataGenerator:
 
     def generate_parquet(self, num_rows: int) -> None:
         """
-        Generate Parquet file with memory optimization.
+        Generate test data in Parquet format with optimized schema.
         
         Args:
             num_rows: Number of rows to generate
         """
         try:
-            # Define schema explicitly
+            start_time = time.time()
+            output_file = self.output_dir / "test_data.parquet"
+            
+            # Define Parquet schema
             schema = pa.schema([
                 ('id', pa.int64()),
                 ('name', pa.string()),
@@ -383,53 +386,35 @@ class DataGenerator:
                 ('last_review_date', pa.timestamp('ns'))
             ])
             
-            # Create output file path
-            output_file = self.output_dir / f"test_data_{num_rows}.parquet"
+            # Process data in chunks
+            for chunk_start in range(0, num_rows, self.chunk_size):
+                chunk_size = min(self.chunk_size, num_rows - chunk_start)
+                chunk_df = self._generate_chunk(chunk_start, chunk_size)
+                
+                # Convert DataFrame chunk to PyArrow Table with schema
+                table = pa.Table.from_pandas(chunk_df, schema=schema)
+                
+                # Write chunk to Parquet file
+                if chunk_start == 0:
+                    pq.write_table(table, str(output_file))
+                else:
+                    pq.write_table(table, str(output_file), append=True)
+                
+                # Log progress
+                progress = (chunk_start + chunk_size) / num_rows * 100
+                logger.info(f"Progress: {progress:.2f}% complete")
             
-            # Process in chunks
-            total_chunks = (num_rows + self.chunk_size - 1) // self.chunk_size
-            with tqdm(total=total_chunks, desc="Generating Parquet") as pbar:
-                with pq.ParquetWriter(output_file, schema) as writer:
-                    for i in range(0, num_rows, self.chunk_size):
-                        chunk_size = min(self.chunk_size, num_rows - i)
-                        
-                        # Generate chunk data with consistent types
-                        chunk_data = {
-                            'id': np.arange(i, i + chunk_size, dtype=np.int64),
-                            'name': [f"User_{j}" for j in range(i, i + chunk_size)],
-                            'email': [f"user_{j}@example.com" for j in range(i, i + chunk_size)],
-                            'age': np.random.randint(18, 65, size=chunk_size, dtype=np.int32),
-                            'salary': np.random.uniform(30000, 120000, size=chunk_size).astype(np.float64),
-                            'department': np.random.choice(['IT', 'HR', 'Finance', 'Marketing'], size=chunk_size),
-                            'hire_date': pd.date_range(start='2020-01-01', periods=chunk_size, freq='D'),
-                            'is_active': np.random.choice([True, False], size=chunk_size),
-                            'performance_score': np.random.uniform(1, 5, size=chunk_size).astype(np.float64),
-                            'last_review_date': pd.date_range(start='2021-01-01', periods=chunk_size, freq='D')
-                        }
-                        
-                        # Create DataFrame with explicit dtypes
-                        df = pd.DataFrame(chunk_data)
-                        
-                        # Convert to PyArrow Table with explicit schema
-                        table = pa.Table.from_pandas(df, schema=schema)
-                        
-                        # Write chunk
-                        writer.write_table(table)
-                        
-                        # Update progress
-                        pbar.update(1)
-                        
-                        # Clean up memory
-                        del df, table, chunk_data
-                        self._cleanup_memory()
-            
-            # Record performance metrics
+            # Record metrics
+            end_time = time.time()
             file_size = output_file.stat().st_size
-            self.performance_metrics['file_sizes'].append(file_size)
-            self.performance_metrics['memory_usage'].append(psutil.Process().memory_info().rss)
+            generation_time = end_time - start_time
             
-            logger.info(f"Successfully generated Parquet file: {output_file}")
-            logger.info(f"File size: {file_size/1024/1024:.2f}MB")
+            self.performance_metrics['file_sizes'].append(file_size)
+            self.performance_metrics['generation_times'].append(generation_time)
+            
+            logger.info(f"Generated Parquet file: {output_file}")
+            logger.info(f"File size: {file_size / (1024*1024):.2f} MB")
+            logger.info(f"Generation time: {generation_time:.2f} seconds")
             
         except Exception as e:
             logger.error(f"Error generating Parquet file: {str(e)}")
@@ -441,17 +426,24 @@ def main() -> None:
         # Load environment variables
         load_dotenv()
         
-        # Get source Dremio URL
+        # Get configuration from environment variables
         source_dremio_url = os.getenv('SOURCE_DREMIO_URL')
+        num_rows = int(os.getenv('NUM_ROWS', 1000000))
+        chunk_size = int(os.getenv('CHUNK_SIZE', 100000))
+        data_dir = os.getenv('DATA_DIR', 'test_data')
         
         # Create data generator
-        generator = DataGenerator(source_dremio_url=source_dremio_url)
+        generator = DataGenerator(
+            output_dir=data_dir,
+            chunk_size=chunk_size,
+            source_dremio_url=source_dremio_url
+        )
         
         # Generate data in all formats
         formats = {
-            'CSV': generator.generate_csv,
-            'TXT': generator.generate_txt,
-            'Parquet': generator.generate_parquet
+            'CSV': lambda: generator.generate_csv(num_rows),
+            'TXT': lambda: generator.generate_txt(num_rows),
+            'Parquet': lambda: generator.generate_parquet(num_rows)
         }
         
         for format_name, generate_func in formats.items():
