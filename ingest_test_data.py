@@ -179,35 +179,101 @@ class DremioIngester:
                 time.sleep(self.retry_delay)
 
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
-        """Make HTTP request with retry logic and error handling."""
+        """
+        Make HTTP request with retry logic and error handling.
+        
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            endpoint: API endpoint
+            **kwargs: Additional arguments for requests
+            
+        Returns:
+            requests.Response: Response from the server
+            
+        Raises:
+            ConnectionError: If request fails after retries
+            TimeoutError: If request times out
+            requests.exceptions.RequestException: For other request errors
+        """
         url = f"{self.dremio_url}{endpoint}"
+        last_error = None
+        
         for attempt in range(self.max_retries):
             try:
+                # Set default timeout if not provided
+                if 'timeout' not in kwargs:
+                    kwargs['timeout'] = 30
+                
                 response = self.session.request(method, url, **kwargs)
                 response.raise_for_status()
                 return response
+                
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                logger.warning(f"Request timeout on attempt {attempt + 1}/{self.max_retries}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
+                else:
+                    raise TimeoutError(f"Request timed out after {self.max_retries} attempts: {str(e)}")
+                
+            except requests.exceptions.ConnectionError as e:
+                last_error = e
+                logger.warning(f"Connection error on attempt {attempt + 1}/{self.max_retries}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay * (attempt + 1))
+                else:
+                    raise ConnectionError(
+                        f"Failed to connect after {self.max_retries} attempts. "
+                        f"Please check:\n"
+                        f"1. Is the Dremio server running?\n"
+                        f"2. Is the URL correct? (should be like http://hostname:9047)\n"
+                        f"3. Are you able to ping the host?\n"
+                        f"4. Is port 9047 open and accessible?\n"
+                        f"Error: {str(e)}"
+                    )
+                
             except requests.exceptions.RequestException as e:
-                if attempt == self.max_retries - 1:
-                    raise ConnectionError(f"Request failed after {self.max_retries} attempts: {str(e)}")
-                logger.warning(f"Request attempt {attempt + 1} failed, retrying in {self.retry_delay} seconds...")
-                time.sleep(self.retry_delay)
+                last_error = e
+                logger.warning(f"Request error on attempt {attempt + 1}/{self.max_retries}: {str(e)}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay * (attempt + 1))
+                else:
+                    raise
+        
+        # This should never be reached due to the raises above, but just in case
+        raise last_error or requests.exceptions.RequestException("Unknown error occurred")
 
     def _check_dremio_connection(self) -> None:
-        """Check connection to Dremio instance and verify data sharing capabilities."""
+        """
+        Check connection to Dremio instance and verify data sharing capabilities.
+        
+        Raises:
+            ConnectionError: If connection check fails
+        """
         try:
             # Check target Dremio connection
             response = self._make_request('GET', '/api/v3/info')
+            logger.info("Successfully connected to target Dremio instance")
             
             # If source Dremio is specified, check data sharing capabilities
-            if self.source_dremio_url:
-                source_session = requests.Session()
-                source_session.auth = (self.username, self.password)
-                source_response = source_session.get(f"{self.source_dremio_url}/api/v3/info")
-                if source_response.status_code != 200:
-                    raise ConnectionError(f"Failed to connect to source Dremio instance: {source_response.text}")
-                
-                logger.info("Successfully verified both Dremio instances")
-                logger.info("Data sharing capabilities confirmed")
+            if hasattr(self, 'source_dremio_url') and self.source_dremio_url:
+                try:
+                    source_session = requests.Session()
+                    source_session.auth = (self.username, self.password)
+                    source_response = source_session.get(
+                        f"{self.source_dremio_url}/api/v3/info",
+                        timeout=30
+                    )
+                    source_response.raise_for_status()
+                    
+                    logger.info("Successfully verified both Dremio instances")
+                    logger.info("Data sharing capabilities confirmed")
+                    
+                except requests.exceptions.RequestException as e:
+                    raise ConnectionError(
+                        f"Failed to connect to source Dremio instance: {str(e)}\n"
+                        f"Please check the source Dremio URL and connectivity."
+                    )
             
         except Exception as e:
             logger.error(f"Dremio connection check failed: {str(e)}")
@@ -245,6 +311,11 @@ class DremioIngester:
             if hasattr(pd, '_cache'):
                 pd._cache.clear()
             
+            # Clear any numpy arrays in memory
+            for name in list(globals()):
+                if isinstance(globals()[name], np.ndarray):
+                    del globals()[name]
+            
             # Get final memory usage
             final_memory = psutil.Process().memory_info().rss
             freed_memory = initial_memory - final_memory
@@ -269,7 +340,7 @@ class DremioIngester:
             Format type (csv, txt, or parquet)
             
         Raises:
-            ValueError: If file format is not supported
+            ValueError: If file format is not supported or invalid
         """
         try:
             file_ext = Path(file_path).suffix.lower()
@@ -293,13 +364,18 @@ class DremioIngester:
                 return 'parquet'
             except:
                 try:
-                    # Try reading as CSV
-                    pd.read_csv(file_path, nrows=1)
-                    return 'csv'
+                    # Try reading as CSV with different encodings
+                    for encoding in ['utf-8', 'latin1', 'iso-8859-1']:
+                        try:
+                            pd.read_csv(file_path, nrows=1, encoding=encoding)
+                            return 'csv'
+                        except UnicodeDecodeError:
+                            continue
+                    raise ValueError("Could not determine file encoding")
                 except:
                     try:
                         # Try reading as text
-                        with open(file_path, 'r') as f:
+                        with open(file_path, 'r', encoding='utf-8') as f:
                             f.readline()
                         return 'txt'
                     except:
@@ -322,12 +398,31 @@ class DremioIngester:
         """
         try:
             if fmt == 'csv' or fmt == 'txt':
-                # Check if file has header and data
-                df = pd.read_csv(file_path, nrows=1)
+                # Try different encodings
+                encodings = ['utf-8', 'latin1', 'iso-8859-1']
+                df = None
+                
+                for encoding in encodings:
+                    try:
+                        df = pd.read_csv(file_path, nrows=1, encoding=encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                if df is None:
+                    raise ValueError("Could not read file with any supported encoding")
+                
                 if df.empty:
                     raise ValueError("File is empty")
-                if len(df.columns) != 10:  # Expected number of columns
-                    raise ValueError(f"Invalid number of columns: {len(df.columns)}")
+                
+                # Check for minimum required columns
+                required_columns = {'id', 'name', 'email', 'age', 'salary', 
+                                  'department', 'hire_date', 'active', 
+                                  'performance_score', 'last_review_date'}
+                
+                missing_columns = required_columns - set(df.columns)
+                if missing_columns:
+                    raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
                 
                 # Check data types
                 expected_types = {
@@ -344,18 +439,17 @@ class DremioIngester:
                 }
                 
                 for col, expected_type in expected_types.items():
-                    if col not in df.columns:
-                        raise ValueError(f"Missing required column: {col}")
                     if not pd.api.types.is_dtype_equal(df[col].dtype, expected_type):
-                        raise ValueError(f"Invalid data type for column {col}: expected {expected_type}, got {df[col].dtype}")
+                        raise ValueError(
+                            f"Invalid data type for column {col}: "
+                            f"expected {expected_type}, got {df[col].dtype}"
+                        )
             
             elif fmt == 'parquet':
                 # Check Parquet file structure
                 table = pq.read_table(file_path)
                 if table.num_rows == 0:
                     raise ValueError("File is empty")
-                if len(table.column_names) != 10:  # Expected number of columns
-                    raise ValueError(f"Invalid number of columns: {len(table.column_names)}")
                 
                 # Check schema
                 expected_schema = pa.schema([
@@ -372,7 +466,10 @@ class DremioIngester:
                 ])
                 
                 if not table.schema.equals(expected_schema):
-                    raise ValueError("Invalid schema in Parquet file")
+                    raise ValueError(
+                        "Invalid schema in Parquet file. Expected columns: " +
+                        ", ".join(expected_schema.names)
+                    )
             
             logger.info(f"File integrity check passed for {file_path}")
             
@@ -564,7 +661,10 @@ class DremioIngester:
                 
             # If still using too much memory after cleanup, raise error
             if current_memory > available_memory * 0.9:
-                raise MemoryError(f"Memory usage too high: {memory_percent:.1f}% ({current_memory/1024/1024/1024:.2f}GB)")
+                raise MemoryError(
+                    f"Memory usage critical: {memory_percent:.1f}% ({current_memory/1024/1024/1024:.2f}GB). "
+                    f"Available: {available_memory/1024/1024/1024:.2f}GB"
+                )
                 
         except Exception as e:
             logger.error(f"Error monitoring memory usage: {str(e)}")
