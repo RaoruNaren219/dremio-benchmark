@@ -43,8 +43,8 @@ def check_version_compatibility() -> None:
     Exits with status code 1 if incompatible versions are found.
     """
     required_versions = {
-        'pandas': '1.4.4',
         'numpy': '1.23.5',
+        'pandas': '1.4.4',
         'pyarrow': '10.0.1',
         'requests': '2.31.0',
         'python-dotenv': '0.21.1',
