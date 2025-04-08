@@ -1,0 +1,55 @@
+# Dremio Benchmark Default Configuration
+# Copy this file to default_config.yml and modify as needed
+
+# Dremio cluster configurations
+clusters:
+  dremio_a:
+    host: dremio-a.example.com
+    port: 9047
+    username: admin
+    password: password  # Better to use environment variable
+    ssl: true
+
+  dremio_b:
+    host: dremio-b.example.com
+    port: 9047
+    username: admin
+    password: password  # Better to use environment variable
+    ssl: true
+
+# HDFS configurations
+hdfs:
+  simple_auth:
+    hadoop_bin: hadoop
+    hadoop_conf: /etc/hadoop/conf/simple-auth
+    user: hdfs
+
+  kerberized:
+    hadoop_bin: hadoop
+    hadoop_conf: /etc/hadoop/conf/kerberos
+    keytab: /path/to/keytab/file.keytab
+    principal: hdfs@EXAMPLE.COM
+
+# Data generation configuration
+data_generation:
+  dsdgen_path: /path/to/tpcds-kit/tools/dsdgen
+  
+# Pipeline configuration
+pipeline:
+  scale_factors:
+    - 1
+    - 10
+  formats:
+    - csv
+    - parquet
+    - orc
+  hdfs_target_dir: /benchmark/tpcds
+  query_dir: test-automation/example_queries
+  timeout_seconds: 600
+  num_iterations: 3
+  
+# Report configuration
+reports:
+  output_dir: reports/output
+  generate_charts: true
+  format: html 

@@ -66,7 +66,22 @@ cd dremio-benchmark
 pip install -r requirements.txt
 ```
 
-3. Obtain and set up the TPC-DS toolkit:
+Alternatively, you can install the package:
+
+```bash
+pip install -e .
+```
+
+3. Copy and configure environment files:
+
+```bash
+cp .env.sample .env
+cp config/default_config.yml.sample config/default_config.yml
+```
+
+4. Edit `.env` and `config/default_config.yml` with your specific settings.
+
+5. Obtain and set up the TPC-DS toolkit:
 
 ```bash
 # Download and build the TPC-DS toolkit
@@ -78,6 +93,21 @@ make
 ## Configuration
 
 Create or modify the configuration file in `config/default_config.yml` with your specific settings. You can also create a custom configuration file and specify it with the `--config` option.
+
+### Using Environment Variables
+
+For sensitive information like passwords and authentication details, you can use environment variables instead of storing them in the configuration file.
+
+Environment variables are automatically loaded from the `.env` file and will override the corresponding configuration in the YAML file.
+
+Example environment variables:
+
+```
+DREMIO_DREMIO_A_HOST=dremio-a.example.com
+DREMIO_DREMIO_A_USERNAME=admin
+DREMIO_DREMIO_A_PASSWORD=your_password_here
+DREMIO_KERBERIZED_PRINCIPAL=hdfs@EXAMPLE.COM
+```
 
 ## Usage
 
@@ -108,3 +138,10 @@ python main.py --config config/my_custom_config.yml
 5. **cross**: Set up cross-cluster access between Dremio instances
 6. **benchmark**: Run benchmark queries on both clusters and across clusters
 7. **report**: Generate performance reports and visualizations
+
+## Security Considerations
+
+- Use environment variables for sensitive information like passwords and tokens
+- Never commit the `.env` file to version control
+- Consider using a credentials manager for production deployments
+- Ensure proper access controls on keytab files and configuration directories

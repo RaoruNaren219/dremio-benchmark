@@ -1,10 +1,9 @@
-# Python files
+# Python build artifacts
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -16,34 +15,44 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
-# Environments
-.env
-.venv
+# Virtual environment
 venv/
-ENV/
 env/
+ENV/
+
+# Data directories
+data/
+formatted_data/
+logs/
+reports/output/
+
+# Environment and configuration files
+.env
+config/default_config.yml
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor and OS specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
 
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Logs
-*.log
-logs/
-
 # Local configuration
 config/local_*.yml
 
-# Pipeline output directories
-pipeline/
-data/
-
 # IDE files
-.idea/
-.vscode/
 *.swp
 *.swo
 
