@@ -284,3 +284,32 @@ If you encounter issues:
 2. Verify your configuration settings
 3. Ensure all required services (Dremio, HDFS) are accessible
 4. For data generation issues, verify the TPC-DS toolkit is properly compiled
+
+## Recent Updates
+
+### Python-Native Command Execution
+
+The codebase has been refactored to eliminate dependencies on shell scripts and subprocess-based command execution in favor of Python-native approaches:
+
+1. **Added Python-Native Command Execution**: The `utils/command.py` module now includes a `PythonCommand` class that provides Python-native alternatives to common shell commands.
+
+2. **HDFS Operations**: Added a Python-native HDFS client in `hdfs-upload/upload_to_hdfs.py` using libraries like `pyarrow.hdfs`, `pydoop.hdfs`, or `hdfs` instead of shell commands.
+
+3. **TPC-DS Data Generation**: Refactored `data-generation/generate_tpcds_data.py` to use Python-native execution of the dsdgen tool using `ctypes` instead of subprocess.
+
+### Benefits of This Approach
+
+- **Cross-Platform Compatibility**: Better support for running on Windows, Linux, and macOS without shell-specific dependencies.
+- **Better Error Handling**: More robust error handling with Python exceptions.
+- **Enhanced Security**: Reduced risk of command injection vulnerabilities.
+- **Improved Testing**: Easier to mock and test Python functions compared to shell commands.
+- **Maintainability**: Unified Python codebase without mixed programming paradigms.
+
+### Dependencies
+
+Added new Python dependencies in `requirements.txt` for HDFS operations:
+- `pyarrow`: Primary HDFS client library
+- `hdfs`: Alternative HDFS client
+- `pydoop`: Alternative HDFS client 
+- `kerberos`: For Kerberos authentication
+- `python-krbV`: Alternative Kerberos library

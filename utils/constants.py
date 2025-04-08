@@ -28,4 +28,7 @@ DEFAULT_DIRECTORIES = {
     "logs": "logs",
     "results": "results", 
     "reports": "reports"
-} 
+}
+
+# Default HDFS target directory
+DEFAULT_HDFS_TARGET_DIR = "/data/performanceTest" 
