@@ -15,7 +15,7 @@ A comprehensive Python framework for benchmarking Dremio clusters using TPC-DS d
 ## Project Structure
 
 ```
-dremio_benchmark/
+dremio-benchmark/
 │
 ├── config/                # Configuration files
 │   └── default_config.yml # Default configuration
@@ -47,7 +47,8 @@ dremio_benchmark/
 │   ├── filesystem.py      # File system utilities
 │   └── logging_config.py  # Logging utilities
 │
-└── main.py                # Main orchestration script
+├── main.py                # Main orchestration script
+└── requirements.txt       # Python dependencies
 ```
 
 ## Installation
@@ -83,19 +84,19 @@ Create or modify the configuration file in `config/default_config.yml` with your
 Run the entire pipeline:
 
 ```bash
-python dremio_benchmark/main.py --config config/default_config.yml --steps all
+python main.py --config config/default_config.yml --steps all
 ```
 
 Run specific steps:
 
 ```bash
-python dremio_benchmark/main.py --steps data convert upload
+python main.py --steps data convert upload
 ```
 
 Run with a custom configuration:
 
 ```bash
-python dremio_benchmark/main.py --config config/my_custom_config.yml
+python main.py --config config/my_custom_config.yml
 ```
 
 ## Pipeline Steps
