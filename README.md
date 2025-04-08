@@ -313,3 +313,85 @@ Added new Python dependencies in `requirements.txt` for HDFS operations:
 - `pydoop`: Alternative HDFS client 
 - `kerberos`: For Kerberos authentication
 - `python-krbV`: Alternative Kerberos library
+
+## Configuration Checklist
+
+Below is a comprehensive checklist of configurations and prerequisites needed to run the benchmark scripts:
+
+### Environment Setup
+
+- [ ] Python 3.6+ installed
+- [ ] Required Python packages installed: `pip install -r requirements.txt`
+- [ ] Sufficient disk space for TPC-DS data generation
+- [ ] Network access to Dremio and HDFS clusters
+
+### TPC-DS Data Generation (generate_tpcds_data.py)
+
+- [ ] TPC-DS toolkit compiled and available
+- [ ] Path to dsdgen binary specified: `--dsdgen-path`
+- [ ] Output directory defined: `--output-dir`
+- [ ] Scale factors configured: `--scale-factors`
+
+### HDFS Upload (upload_to_hdfs.py)
+
+- [ ] Local data directory with generated data: `--data-dir`
+- [ ] HDFS target directory: `--hdfs-target-dir`
+- [ ] Scale factors to upload: `--scale-factors`
+- [ ] Data formats to upload: `--formats`
+
+#### Simple Authentication HDFS
+- [ ] Path to Simple-auth Hadoop configuration: `--simple-auth-hadoop-conf`
+- [ ] Simple-auth username: `--simple-auth-user`
+
+#### Kerberos Authentication HDFS
+- [ ] Path to Kerberized Hadoop configuration: `--kerberized-hadoop-conf`
+- [ ] Path to keytab file: `--keytab`
+- [ ] Kerberos principal: `--principal`
+
+### Dremio DDL Generation (create_tables.py)
+
+- [ ] Dremio host: `--dremio-host`
+- [ ] Dremio port: `--dremio-port`
+- [ ] Dremio username: `--dremio-username`
+- [ ] Dremio password: `--dremio-password`
+- [ ] HDFS base path: `--hdfs-base-path`
+- [ ] SQL output directory: `--output-dir`
+- [ ] Whether to execute DDL: `--execute`
+
+### Benchmark Testing (run_benchmarks.py)
+
+- [ ] Dremio host: `--host`
+- [ ] Dremio port: `--port`
+- [ ] Dremio username: `--username`
+- [ ] Dremio password: `--password`
+- [ ] Directory with SQL queries: `--query-dir`
+- [ ] CSV output file: `--output`
+- [ ] Concurrency level: `--concurrency`
+- [ ] Number of iterations: `--iterations`
+
+### Cross-Cluster Setup (setup_cross_cluster.py)
+
+- [ ] Dremio A host, port, username, password
+- [ ] Dremio B host, port, username, password
+- [ ] Cross-cluster user credentials
+
+### Sample Command Templates
+
+```bash
+# Generate TPC-DS data
+python data-generation/generate_tpcds_data.py --dsdgen-path /path/to/dsdgen --output-dir ./data --scale-factors 1 10
+
+# Upload to HDFS
+python hdfs-upload/upload_to_hdfs.py --data-dir ./data/formatted --hdfs-target-dir /benchmark/tpcds \
+  --simple-auth-hadoop-conf /path/to/hadoop/conf --simple-auth-user hdfs \
+  --kerberized-hadoop-conf /path/to/kerb/conf --keytab /path/to/user.keytab --principal user@REALM
+
+# Create Dremio tables
+python dremio-ddls/create_tables.py --dremio-host localhost --dremio-port 9047 \
+  --dremio-username admin --dremio-password password --hdfs-base-path /benchmark/tpcds \
+  --output-dir ./sql --execute
+
+# Run benchmarks
+python test-automation/run_benchmarks.py --host localhost --port 9047 \
+  --username admin --password password --query-dir ./queries --output results.csv
+```
