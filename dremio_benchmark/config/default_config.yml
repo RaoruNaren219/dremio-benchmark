@@ -1,0 +1,59 @@
+# Default configuration for Dremio benchmark pipeline
+
+# Pipeline settings
+pipeline:
+  base_dir: "./pipeline"
+  scale_factors: [1, 10]
+  formats: ["csv", "json", "pipe", "orc", "parquet"]
+  hdfs_target_dir: "/benchmark/tpcds"
+  
+# Dremio clusters
+clusters:
+  dremio_a:
+    host: "dremio-a-host"
+    port: 9047
+    username: "admin"
+    password: "password"
+    ssl: true
+    description: "Simple-auth HDFS cluster"
+  
+  dremio_b:
+    host: "dremio-b-host"
+    port: 9047
+    username: "admin"
+    password: "password"
+    ssl: true
+    description: "Kerberized HDFS cluster"
+
+# Cross-cluster settings
+cross_cluster:
+  user: "cross_user"
+  password: "cross-cluster-password"
+
+# HDFS settings
+hdfs:
+  simple_auth:
+    hadoop_bin: "hadoop"
+    hadoop_conf: "/path/to/simple/auth/hadoop/conf"
+    user: "hdfs"
+  
+  kerberized:
+    hadoop_bin: "hadoop"
+    hadoop_conf: "/path/to/kerberos/hadoop/conf"
+    keytab: "/path/to/keytab"
+    principal: "username@REALM.COM"
+
+# Data generation settings
+data_generation:
+  dsdgen_path: "/path/to/tpcds-kit/tools/dsdgen"
+
+# Benchmark settings
+benchmark:
+  concurrency: 4
+  iterations: 3
+  query_dir: "test-automation/example_queries"
+
+# Report settings
+report:
+  title: "Dremio Cross-Cluster Benchmark Report"
+  include_charts: true 
