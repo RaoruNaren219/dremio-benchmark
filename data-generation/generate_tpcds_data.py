@@ -8,6 +8,8 @@ This script generates TPC-DS data at 1GB and 10GB scale factors
 import os
 import logging
 import sys
+import platform
+import subprocess
 import ctypes
 from pathlib import Path
 
@@ -38,75 +40,63 @@ class DSDGenWrapper:
         self.dsdgen_path = dsdgen_path
         self.dsdgen_dir = os.path.dirname(dsdgen_path)
         
+        # Check if running in WSL
+        self.is_wsl = 'microsoft-standard' in platform.uname().release.lower() if platform.system() == 'Linux' else False
+        
+        # Ensure dsdgen is executable in WSL
+        if self.is_wsl:
+            try:
+                os.chmod(dsdgen_path, 0o755)
+                logger.info(f"Made dsdgen executable: {dsdgen_path}")
+            except Exception as e:
+                logger.warning(f"Could not make dsdgen executable: {e}")
+    
     def generate_data(self, output_dir, scale_factor):
         """
-        Generate TPC-DS data using native Python functionality
+        Generate TPC-DS data for a specific scale factor
         
         Args:
-            output_dir (str): Output directory for data
+            output_dir (str): Output directory
             scale_factor (int): Scale factor in GB
             
         Returns:
-            bool: Success status
+            bool: True if successful, False otherwise
         """
-        logger.info(f"Generating data at scale factor {scale_factor}GB...")
-        
         # Create output directory if it doesn't exist
-        sf_output_dir = os.path.join(output_dir, f"{scale_factor}gb")
-        os.makedirs(sf_output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
         
-        current_dir = os.getcwd()
+        # Use appropriate method based on environment
+        if self.is_wsl:
+            return self._generate_data_wsl(output_dir, scale_factor)
+        elif platform.system() == 'Windows':
+            return self._generate_data_windows(output_dir, scale_factor)
+        else:
+            return self._generate_data_linux(output_dir, scale_factor)
+    
+    def _generate_data_wsl(self, output_dir, scale_factor):
+        """WSL implementation of data generation"""
         try:
-            # Change to dsdgen directory (required for dsdgen to work properly)
-            os.chdir(self.dsdgen_dir)
-            
-            # If running on Windows, use ctypes to call the executable
-            if sys.platform.startswith('win'):
-                return self._generate_data_windows(sf_output_dir, scale_factor)
-            else:
-                # On Unix-like systems, we can use the more direct library approach
-                return self._generate_data_unix(sf_output_dir, scale_factor)
-                
-        except Exception as e:
-            logger.error(f"Error generating {scale_factor}GB data: {e}")
-            return False
-        finally:
-            # Change back to original directory
-            os.chdir(current_dir)
-            
-    def _generate_data_unix(self, output_dir, scale_factor):
-        """Unix implementation of data generation"""
-        try:
-            # Try to load the shared library directly if available
-            # Note: This would require the dsdgen to be compiled as a shared library
-            # If it's not available as a shared library, this will fail and fall back to command-line execution
-            from ctypes import cdll
-            
-            # This is simplified - in reality, you would need to create proper C function bindings
-            dsdgen_lib = cdll.LoadLibrary(os.path.join(self.dsdgen_dir, "libdsdgen.so"))
-            
-            # Set up arguments for the C function
-            # These would need to match the actual dsdgen library function signature
-            args = [
+            # In WSL, use subprocess with proper path handling
+            cmd = [
+                self.dsdgen_path,
                 "-SCALE", str(scale_factor),
                 "-DIR", output_dir,
                 "-FORCE"
             ]
             
-            # Call the function
-            result = dsdgen_lib.main(len(args), args)
-            success = (result == 0)
+            logger.info(f"Running dsdgen in WSL: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
-            if success:
-                logger.info(f"Successfully generated {scale_factor}GB data")
-            else:
-                logger.error(f"Failed to generate {scale_factor}GB data, return code: {result}")
-                
-            return success
+            logger.info(f"Successfully generated {scale_factor}GB data in WSL")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error generating {scale_factor}GB data in WSL: {e}")
+            logger.error(f"stdout: {e.stdout.decode('utf-8')}")
+            logger.error(f"stderr: {e.stderr.decode('utf-8')}")
+            return False
         except Exception as e:
-            logger.error(f"Could not load dsdgen as a library, error: {e}")
-            # Fall back to external process
-            return self._generate_data_external(output_dir, scale_factor)
+            logger.error(f"Unexpected error in WSL: {e}")
+            return False
     
     def _generate_data_windows(self, output_dir, scale_factor):
         """Windows implementation of data generation"""
@@ -141,11 +131,34 @@ class DSDGenWrapper:
             logger.error(f"Error using Windows native execution, error: {e}")
             # Fall back to external process
             return self._generate_data_external(output_dir, scale_factor)
+    
+    def _generate_data_linux(self, output_dir, scale_factor):
+        """Linux implementation of data generation"""
+        try:
+            # On Linux, use subprocess with proper path handling
+            cmd = [
+                self.dsdgen_path,
+                "-SCALE", str(scale_factor),
+                "-DIR", output_dir,
+                "-FORCE"
+            ]
+            
+            logger.info(f"Running dsdgen on Linux: {' '.join(cmd)}")
+            result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            logger.info(f"Successfully generated {scale_factor}GB data on Linux")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error generating {scale_factor}GB data on Linux: {e}")
+            logger.error(f"stdout: {e.stdout.decode('utf-8')}")
+            logger.error(f"stderr: {e.stderr.decode('utf-8')}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error on Linux: {e}")
+            return False
             
     def _generate_data_external(self, output_dir, scale_factor):
         """Fallback method using subprocess if direct methods fail"""
-        import subprocess
-        
         try:
             # Construct command
             cmd = [

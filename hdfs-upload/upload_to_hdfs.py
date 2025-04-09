@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
+import platform
+import subprocess
 
 sys.path.append(str(Path(__file__).parent.parent))
 from utils.command import run_command, PythonCommand
@@ -44,232 +46,119 @@ FORMATS = ["csv", "json", "pipe", "orc", "parquet"]
 
 class HDFSPythonClient:
     """
-    Python-native HDFS client that doesn't rely on shell commands.
-    Uses pyarrow.hdfs or pydoop.hdfs depending on availability.
+    Python-native HDFS client that provides alternatives to shell commands.
     """
     
-    def __init__(self, hadoop_conf_dir: str = None, 
-                 use_kerberos: bool = None, 
-                 principal: str = None):
+    def __init__(self, hadoop_bin: str, hadoop_conf: str, user: str = "hdfs"):
         """
         Initialize the HDFS client
         
         Args:
-            hadoop_conf_dir: Path to Hadoop configuration directory
-            use_kerberos: Whether to use Kerberos authentication
-            principal: Kerberos principal
+            hadoop_bin: Path to Hadoop binary
+            hadoop_conf: Path to Hadoop configuration
+            user: Hadoop user name
         """
-        self.hadoop_conf_dir = hadoop_conf_dir
-        self.hdfs = None
-        self.use_kerberos = use_kerberos
-        self.principal = principal
-        self._initialize_client()
+        self.hadoop_bin = hadoop_bin
+        self.hadoop_conf = hadoop_conf
+        self.user = user
         
-    def _initialize_client(self) -> None:
-        """Initialize the appropriate HDFS client based on available libraries"""
-        # Try to determine if Kerberos should be used if not explicitly specified
-        if self.use_kerberos is None:
-            self.use_kerberos = self._should_use_kerberos()
-            
-        logger.debug(f"HDFS client initialization - Using Kerberos: {self.use_kerberos}")
-            
-        # Try to use pyarrow first, fall back to pydoop, then hdfs
-        try:
-            import pyarrow.hdfs
-            logger.info("Using pyarrow.hdfs for HDFS operations")
-            
-            # Parse Hadoop configuration to get connection details
-            host, port = self._get_hdfs_address_from_conf()
-            
-            # Additional options for Kerberos
-            extra_conf = self._get_hdfs_conf()
-            
-            # Create connection options
-            conn_kwargs = {
-                'host': host,
-                'port': port,
-                'user': None,  # Will use current user or HADOOP_USER_NAME env var
-                'extra_conf': extra_conf
-            }
-            
-            # Add Kerberos options if needed
-            if self.use_kerberos:
-                conn_kwargs['kerb_ticket'] = True  # Use the ticket cache
-                
-                # Set principal if available
-                if self.principal:
-                    conn_kwargs['user'] = self.principal.split('@')[0]  # Extract username part
-            
-            self.hdfs = pyarrow.hdfs.connect(**conn_kwargs)
-            self.client_type = 'pyarrow'
-        except ImportError:
-            try:
-                import pydoop.hdfs as hdfs
-                logger.info("Using pydoop.hdfs for HDFS operations")
-                self.hdfs = hdfs
-                self.client_type = 'pydoop'
-            except ImportError:
-                try:
-                    import hdfs
-                    logger.info("Using hdfs for HDFS operations")
-                    # Parse Hadoop configuration to get connection details
-                    host, port = self._get_hdfs_address_from_conf()
-                    
-                    # Create connection options
-                    conn_kwargs = {
-                        'url': f'http://{host}:{port}',
-                        'root': '/',
-                    }
-                    
-                    # Add Kerberos authentication if needed
-                    if self.use_kerberos:
-                        try:
-                            import requests_kerberos
-                            conn_kwargs['session'] = requests.Session()
-                            conn_kwargs['session'].auth = requests_kerberos.HTTPKerberosAuth(
-                                mutual_authentication=requests_kerberos.OPTIONAL)
-                            logger.info("Using Kerberos authentication for hdfs client")
-                        except ImportError:
-                            logger.warning("requests_kerberos not available, Kerberos auth may not work")
-                    
-                    self.hdfs = hdfs.InsecureClient(**conn_kwargs)
-                    self.client_type = 'hdfs'
-                except ImportError:
-                    logger.error("No HDFS client library found. Please install pyarrow, pydoop, or hdfs.")
-                    raise ImportError("No HDFS client library available")
+        # Check if running in WSL
+        self.is_wsl = 'microsoft-standard' in platform.uname().release.lower() if platform.system() == 'Linux' else False
+        
+        # Set environment variables
+        self.env = os.environ.copy()
+        self.env["HADOOP_CONF_DIR"] = hadoop_conf
+        self.env["HADOOP_USER_NAME"] = user
+        
+        # For WSL, ensure paths are properly formatted
+        if self.is_wsl:
+            self.hadoop_bin = self._convert_wsl_path(self.hadoop_bin)
+            self.hadoop_conf = self._convert_wsl_path(self.hadoop_conf)
     
-    def _get_hdfs_address_from_conf(self) -> Tuple[str, int]:
+    def _convert_wsl_path(self, path: str) -> str:
         """
-        Parse Hadoop configuration to get HDFS namenode address
+        Convert Windows path to WSL path if needed
         
+        Args:
+            path: Path to convert
+            
         Returns:
-            Tuple of (host, port)
+            Converted path
         """
-        # Default values
-        host = 'localhost'
-        port = 8020  # Default HDFS port
-        
-        if self.hadoop_conf_dir:
-            try:
-                # Try to parse core-site.xml
-                import xml.etree.ElementTree as ET
-                core_site_path = os.path.join(self.hadoop_conf_dir, 'core-site.xml')
-                
-                if os.path.exists(core_site_path):
-                    tree = ET.parse(core_site_path)
-                    root = tree.getroot()
-                    
-                    # Find fs.defaultFS property
-                    for prop in root.findall('./property'):
-                        name = prop.find('name')
-                        value = prop.find('value')
-                        
-                        if name is not None and value is not None and name.text == 'fs.defaultFS':
-                            # Parse hdfs://host:port
-                            fs_url = value.text
-                            if fs_url.startswith('hdfs://'):
-                                address = fs_url[7:]  # Remove 'hdfs://'
-                                if ':' in address:
-                                    host, port_str = address.split(':', 1)
-                                    try:
-                                        port = int(port_str)
-                                    except ValueError:
-                                        pass  # Use default port
-            except Exception as e:
-                logger.warning(f"Error parsing Hadoop configuration: {e}")
-                
-        return host, port
+        if self.is_wsl and '\\' in path:
+            # Convert Windows path to WSL path
+            # Example: C:\path\to\file -> /mnt/c/path/to/file
+            path = path.replace('\\', '/')
+            if ':' in path:
+                drive, rest = path.split(':', 1)
+                path = f"/mnt/{drive.lower()}{rest}"
+            return path
+        return path
     
-    def _get_hdfs_conf(self) -> Dict[str, str]:
-        """
-        Get Hadoop configuration as dictionary
-        
-        Returns:
-            Dictionary of configuration properties
-        """
-        conf = {}
-        
-        if self.hadoop_conf_dir:
-            try:
-                import xml.etree.ElementTree as ET
-                
-                # Parse core-site.xml
-                core_site_path = os.path.join(self.hadoop_conf_dir, 'core-site.xml')
-                if os.path.exists(core_site_path):
-                    tree = ET.parse(core_site_path)
-                    root = tree.getroot()
-                    
-                    for prop in root.findall('./property'):
-                        name = prop.find('name')
-                        value = prop.find('value')
-                        
-                        if name is not None and value is not None:
-                            conf[name.text] = value.text
-                
-                # Parse hdfs-site.xml
-                hdfs_site_path = os.path.join(self.hadoop_conf_dir, 'hdfs-site.xml')
-                if os.path.exists(hdfs_site_path):
-                    tree = ET.parse(hdfs_site_path)
-                    root = tree.getroot()
-                    
-                    for prop in root.findall('./property'):
-                        name = prop.find('name')
-                        value = prop.find('value')
-                        
-                        if name is not None and value is not None:
-                            conf[name.text] = value.text
-            except Exception as e:
-                logger.warning(f"Error parsing Hadoop configuration: {e}")
-                
-        return conf
-    
-    def mkdir(self, path: str) -> bool:
+    def mkdir(self, hdfs_path: str) -> bool:
         """
         Create directory in HDFS
         
         Args:
-            path: HDFS path to create
+            hdfs_path: HDFS path
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            if self.client_type == 'pyarrow':
-                self.hdfs.mkdir(path, create_parents=True)
-            elif self.client_type == 'pydoop':
-                self.hdfs.mkdir(path)
-            elif self.client_type == 'hdfs':
-                self.hdfs.makedirs(path)
+            # Convert path if needed
+            hdfs_path = self._convert_wsl_path(hdfs_path)
+            
+            # Use subprocess to create directory
+            cmd = [self.hadoop_bin, "fs", "-mkdir", "-p", hdfs_path]
+            
+            logger.info(f"Creating HDFS directory: {hdfs_path}")
+            result = subprocess.run(cmd, env=self.env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            logger.info(f"Successfully created HDFS directory: {hdfs_path}")
             return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error creating HDFS directory {hdfs_path}: {e}")
+            logger.error(f"stdout: {e.stdout.decode('utf-8')}")
+            logger.error(f"stderr: {e.stderr.decode('utf-8')}")
+            return False
         except Exception as e:
-            logger.error(f"Error creating directory {path}: {e}")
+            logger.error(f"Unexpected error creating HDFS directory {hdfs_path}: {e}")
             return False
     
-    def upload_file(self, local_path: str, hdfs_path: str) -> bool:
+    def upload_file(self, local_file: str, hdfs_file: str) -> bool:
         """
         Upload file to HDFS
         
         Args:
-            local_path: Local file path
-            hdfs_path: HDFS target path
+            local_file: Local file path
+            hdfs_file: HDFS target path
             
         Returns:
             True if successful, False otherwise
         """
         try:
-            if self.client_type == 'pyarrow':
-                with open(local_path, 'rb') as local_file:
-                    with self.hdfs.open(hdfs_path, 'wb') as hdfs_file:
-                        hdfs_file.write(local_file.read())
-            elif self.client_type == 'pydoop':
-                self.hdfs.put(local_path, hdfs_path)
-            elif self.client_type == 'hdfs':
-                self.hdfs.upload(hdfs_path, local_path, overwrite=True)
-            return True
-        except Exception as e:
-            logger.error(f"Error uploading file {local_path} to {hdfs_path}: {e}")
-            return False
+            # Convert paths if needed
+            local_file = self._convert_wsl_path(local_file)
+            hdfs_file = self._convert_wsl_path(hdfs_file)
             
+            # Use subprocess to upload file
+            cmd = [self.hadoop_bin, "fs", "-put", "-f", local_file, hdfs_file]
+            
+            logger.info(f"Uploading file to HDFS: {local_file} -> {hdfs_file}")
+            result = subprocess.run(cmd, env=self.env, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            logger.info(f"Successfully uploaded file to HDFS: {hdfs_file}")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error uploading file to HDFS {local_file} -> {hdfs_file}: {e}")
+            logger.error(f"stdout: {e.stdout.decode('utf-8')}")
+            logger.error(f"stderr: {e.stderr.decode('utf-8')}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error uploading file to HDFS {local_file} -> {hdfs_file}: {e}")
+            return False
+    
     def upload_directory(self, local_dir: str, hdfs_dir: str) -> bool:
         """
         Upload directory to HDFS
@@ -282,6 +171,10 @@ class HDFSPythonClient:
             True if successful, False otherwise
         """
         try:
+            # Convert paths if needed
+            local_dir = self._convert_wsl_path(local_dir)
+            hdfs_dir = self._convert_wsl_path(hdfs_dir)
+            
             # Create target directory
             self.mkdir(hdfs_dir)
             
@@ -308,46 +201,6 @@ class HDFSPythonClient:
         except Exception as e:
             logger.error(f"Error uploading directory {local_dir} to {hdfs_dir}: {e}")
             return False
-
-    def _should_use_kerberos(self) -> bool:
-        """
-        Determine if Kerberos authentication should be used based on Hadoop configuration
-        
-        Returns:
-            bool: True if Kerberos should be used
-        """
-        if not self.hadoop_conf_dir:
-            return False
-            
-        try:
-            # Check for Kerberos-related properties in Hadoop configuration
-            hdfs_conf = self._get_hdfs_conf()
-            auth_method = hdfs_conf.get('hadoop.security.authentication', '')
-            
-            if auth_method.lower() == 'kerberos':
-                logger.info("Detected Kerberos authentication from Hadoop configuration")
-                return True
-                
-            # Additional check in core-site.xml
-            import xml.etree.ElementTree as ET
-            core_site_path = os.path.join(self.hadoop_conf_dir, 'core-site.xml')
-            
-            if os.path.exists(core_site_path):
-                tree = ET.parse(core_site_path)
-                root = tree.getroot()
-                
-                for prop in root.findall('./property'):
-                    name = prop.find('name')
-                    value = prop.find('value')
-                    
-                    if name is not None and name.text == 'hadoop.security.authentication' and \
-                       value is not None and value.text.lower() == 'kerberos':
-                        logger.info("Detected Kerberos authentication from core-site.xml")
-                        return True
-        except Exception as e:
-            logger.warning(f"Error checking for Kerberos configuration: {e}")
-            
-        return False
 
 
 def upload_to_simple_auth_hdfs(
@@ -382,7 +235,7 @@ def upload_to_simple_auth_hdfs(
     
     try:
         # Initialize HDFS client
-        hdfs_client = HDFSPythonClient(hadoop_conf_dir)
+        hdfs_client = HDFSPythonClient(hadoop_bin=hadoop_conf_dir, hadoop_conf=hadoop_conf_dir, user=user)
         
         # Create target directory
         target_dir = f"{hdfs_target_dir}/{scale}gb/{format_type}"
@@ -541,7 +394,7 @@ def upload_to_kerberized_hdfs(
                     return False
         
         # Initialize HDFS client with Kerberos support
-        hdfs_client = HDFSPythonClient(hadoop_conf_dir, use_kerberos=have_ticket, principal=principal)
+        hdfs_client = HDFSPythonClient(hadoop_bin=hadoop_conf_dir, hadoop_conf=hadoop_conf_dir, user=principal)
         
         # Create target directory
         target_dir = f"{hdfs_target_dir}/{scale}gb/{format_type}"
