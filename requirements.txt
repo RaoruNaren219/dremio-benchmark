@@ -15,7 +15,8 @@ hdfs==2.7.0
 # Updated Kerberos dependencies - choose one based on your system
 kerberos==1.3.1
 # Optional: gssapi for modern Kerberos support (preferred over kerberos if available)
-gssapi==1.8.2
+# Commented out due to build issues on Windows - requires system dependencies
+# gssapi==1.8.2
 # Optional: requests-kerberos for web APIs with Kerberos auth
 requests-kerberos==0.14.0
 pydoop==2.0.0 
