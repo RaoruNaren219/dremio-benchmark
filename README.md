@@ -51,7 +51,7 @@ dremio-benchmark/
 └── requirements.txt       # Python dependencies
 ```
 
-## Installation
+## Quick Start
 
 ### 1. Clone the repository
 
@@ -60,7 +60,7 @@ git clone https://github.com/RaoruNaren219/dremio-benchmark.git
 cd dremio-benchmark
 ```
 
-### 2. Set up a Python virtual environment (recommended)
+### 2. Set up a Python virtual environment
 
 ```bash
 # Create virtual environment
@@ -77,12 +77,6 @@ source venv/bin/activate
 
 ```bash
 pip install -r requirements.txt
-```
-
-Alternatively, you can install the package in development mode:
-
-```bash
-pip install -e .
 ```
 
 ### 4. Set up TPC-DS toolkit
@@ -105,6 +99,79 @@ cp config/default_config.yml.sample config/default_config.yml
 ```
 
 Edit the `.env` file and `config/default_config.yml` file with your specific settings.
+
+### 6. Run the complete pipeline
+
+```bash
+python main.py --steps all
+```
+
+## Git Workflow
+
+This project follows a Git-based workflow for version control and collaboration. Here's how to work with the repository:
+
+### Basic Git Operations
+
+```bash
+# Check repository status
+git status
+
+# Pull latest changes
+git pull origin main
+
+# Create a new branch for your feature
+git checkout -b feature/your-feature-name
+
+# Stage changes
+git add <modified-files>
+
+# Commit changes
+git commit -m "Description of your changes"
+
+# Push changes to remote repository
+git push origin feature/your-feature-name
+```
+
+### Branching Strategy
+
+- `main`: Production-ready code
+- `develop`: Development branch for integration
+- `feature/*`: Feature branches for new functionality
+- `bugfix/*`: Branches for bug fixes
+- `release/*`: Branches for release preparation
+
+### Git Best Practices
+
+1. **Commit Messages**:
+   - Use clear, descriptive commit messages
+   - Follow the format: "Type: Description" (e.g., "Feature: Add HDFS upload functionality")
+   - Types: Feature, Bugfix, Docs, Refactor, Test, Chore
+
+2. **Branching**:
+   - Create feature branches from `develop`
+   - Keep branches focused on a single feature or fix
+   - Delete branches after merging
+
+3. **Pull Requests**:
+   - Create pull requests for all changes
+   - Include a clear description of changes
+   - Reference related issues in the description
+
+4. **Code Review**:
+   - Request reviews from team members
+   - Address review comments promptly
+   - Ensure CI checks pass before merging
+
+### Git Configuration
+
+```bash
+# Configure your Git identity
+git config --global user.name "Your Name"
+git config --global user.email "your.email@example.com"
+
+# Configure Git to use LF line endings (recommended for cross-platform development)
+git config --global core.autocrlf input
+```
 
 ## Configuration
 
@@ -142,12 +209,6 @@ Generates TPC-DS data at specified scale factors using the TPC-DS toolkit.
 python main.py --steps data
 ```
 
-**Key Settings**:
-- `data_generation.dsdgen_path`: Path to the TPC-DS dsdgen executable
-- `pipeline.scale_factors`: List of scale factors to generate (e.g., [1, 10])
-
-**Progress**: The script will show progress for each table being generated and log completion status.
-
 ### 2. Data Conversion (Step: `convert`)
 
 Converts the raw data into various formats (CSV, JSON, Pipe-delimited, ORC, Parquet).
@@ -155,12 +216,6 @@ Converts the raw data into various formats (CSV, JSON, Pipe-delimited, ORC, Parq
 ```bash
 python main.py --steps convert
 ```
-
-**Key Settings**:
-- `pipeline.formats`: List of formats to convert to (e.g., ["csv", "parquet", "orc"])
-- `pipeline.scale_factors`: Scale factors to process
-
-**Progress**: The script will show conversion progress for each table and format.
 
 ### 3. HDFS Upload (Step: `upload`)
 
@@ -170,13 +225,6 @@ Uploads the formatted data to both HDFS clusters (Simple-auth and Kerberized).
 python main.py --steps upload
 ```
 
-**Key Settings**:
-- `hdfs.simple_auth`: Simple authentication HDFS configuration
-- `hdfs.kerberized`: Kerberized HDFS configuration
-- `pipeline.hdfs_target_dir`: Target directory in HDFS
-
-**Progress**: The script will show upload progress for each table and format.
-
 ### 4. DDL Generation (Step: `ddl`)
 
 Generates and optionally executes Dremio DDL statements for all tables.
@@ -184,13 +232,6 @@ Generates and optionally executes Dremio DDL statements for all tables.
 ```bash
 python main.py --steps ddl
 ```
-
-**Key Settings**:
-- `clusters.dremio_a`: Configuration for Dremio cluster A
-- `clusters.dremio_b`: Configuration for Dremio cluster B
-- `execute_ddl`: Whether to execute the generated DDL statements
-
-**Progress**: The script will show DDL generation progress and execution status if enabled.
 
 ### 5. Cross-Cluster Setup (Step: `cross`)
 
@@ -200,12 +241,6 @@ Sets up cross-cluster access between Dremio instances.
 python main.py --steps cross
 ```
 
-**Key Settings**:
-- `clusters.dremio_a`: Configuration for Dremio cluster A
-- `clusters.dremio_b`: Configuration for Dremio cluster B
-
-**Progress**: The script will show setup progress and connection status.
-
 ### 6. Run Benchmarks (Step: `benchmark`)
 
 Runs benchmark queries on both clusters and across clusters.
@@ -213,13 +248,6 @@ Runs benchmark queries on both clusters and across clusters.
 ```bash
 python main.py --steps benchmark
 ```
-
-**Key Settings**:
-- `pipeline.query_dir`: Directory containing benchmark queries
-- `pipeline.timeout_seconds`: Query timeout in seconds
-- `pipeline.num_iterations`: Number of iterations for each query
-
-**Progress**: The script will show query execution progress, timing information, and success/failure status for each query.
 
 ### 7. Generate Reports (Step: `report`)
 
@@ -229,20 +257,7 @@ Generates performance reports and visualizations.
 python main.py --steps report
 ```
 
-**Key Settings**:
-- `reports.output_dir`: Directory for report output
-- `reports.generate_charts`: Whether to generate charts
-- `reports.format`: Report format (e.g., "html", "csv")
-
-**Progress**: The script will show report generation progress and output file locations.
-
-## Running the Complete Pipeline
-
-To run the entire pipeline at once:
-
-```bash
-python main.py --steps all
-```
+## Running Specific Steps
 
 To run specific steps:
 
@@ -256,38 +271,7 @@ To use a custom configuration file:
 python main.py --config config/my_custom_config.yml --steps all
 ```
 
-## Pipeline Progress
-
-When running the pipeline, you'll see progress information for each step:
-
-1. **Initialization**: Loading configuration and setting up directories
-2. **Step Execution**: For each step, you'll see:
-   - Step start notification
-   - Progress for each substep (e.g., table processing)
-   - Success/failure status
-3. **Summary**: At the end, a summary of all steps executed and their status
-
-All output is also logged to `benchmark_pipeline.log` for later review.
-
-## Security Considerations
-
-- Use environment variables for sensitive information like passwords and tokens
-- Never commit the `.env` file to version control
-- Consider using a credentials manager for production deployments
-- Ensure proper access controls on keytab files and configuration directories
-
-## Troubleshooting
-
-If you encounter issues:
-
-1. Check the log file: `benchmark_pipeline.log`
-2. Verify your configuration settings
-3. Ensure all required services (Dremio, HDFS) are accessible
-4. For data generation issues, verify the TPC-DS toolkit is properly compiled
-
-## Recent Updates
-
-### Python-Native Command Execution
+## Python-Native Command Execution
 
 The codebase has been refactored to eliminate dependencies on shell scripts and subprocess-based command execution in favor of Python-native approaches:
 
@@ -304,15 +288,6 @@ The codebase has been refactored to eliminate dependencies on shell scripts and 
 - **Enhanced Security**: Reduced risk of command injection vulnerabilities.
 - **Improved Testing**: Easier to mock and test Python functions compared to shell commands.
 - **Maintainability**: Unified Python codebase without mixed programming paradigms.
-
-### Dependencies
-
-Added new Python dependencies in `requirements.txt` for HDFS operations:
-- `pyarrow`: Primary HDFS client library
-- `hdfs`: Alternative HDFS client
-- `pydoop`: Alternative HDFS client 
-- `kerberos`: For Kerberos authentication
-- `python-krbV`: Alternative Kerberos library
 
 ## Configuration Checklist
 
@@ -375,7 +350,7 @@ Below is a comprehensive checklist of configurations and prerequisites needed to
 - [ ] Dremio B host, port, username, password
 - [ ] Cross-cluster user credentials
 
-### Sample Command Templates
+## Sample Command Templates
 
 ```bash
 # Generate TPC-DS data
@@ -395,3 +370,19 @@ python dremio-ddls/create_tables.py --dremio-host localhost --dremio-port 9047 \
 python test-automation/run_benchmarks.py --host localhost --port 9047 \
   --username admin --password password --query-dir ./queries --output results.csv
 ```
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. Check the log file: `benchmark_pipeline.log`
+2. Verify your configuration settings
+3. Ensure all required services (Dremio, HDFS) are accessible
+4. For data generation issues, verify the TPC-DS toolkit is properly compiled
+
+## Security Considerations
+
+- Use environment variables for sensitive information like passwords and tokens
+- Never commit the `.env` file to version control
+- Consider using a credentials manager for production deployments
+- Ensure proper access controls on keytab files and configuration directories

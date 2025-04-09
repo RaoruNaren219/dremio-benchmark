@@ -1,53 +1,83 @@
 """
-Logging configuration utilities
+Centralized logging configuration for the Dremio benchmarking project.
 """
 
 import logging
 import sys
-import os
+from pathlib import Path
 from typing import Optional
 
 def setup_logging(
     log_file: Optional[str] = None,
-    log_level: int = logging.INFO,
-    module_name: str = "dremio_benchmark"
+    module_name: Optional[str] = None,
+    level: int = logging.INFO
 ) -> logging.Logger:
     """
-    Configure logging for a module
+    Set up logging configuration with consistent formatting.
     
     Args:
-        log_file (Optional[str]): Path to log file
-        log_level (int): Logging level
-        module_name (str): Module name for the logger
-    
+        log_file: Path to log file. If None, defaults to benchmark.log
+        module_name: Name of the module for the logger. If None, uses root logger
+        level: Logging level (default: INFO)
+        
     Returns:
-        logging.Logger: Configured logger
+        Configured logger instance
     """
-    # Create logger
-    logger = logging.getLogger(module_name)
-    logger.setLevel(log_level)
+    # Set up default log file if none provided
+    if log_file is None:
+        log_file = "benchmark.log"
     
-    # Create formatter
-    formatter = logging.Formatter(
+    # Create log directory if it doesn't exist
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Get logger instance
+    logger = logging.getLogger(module_name) if module_name else logging.getLogger()
+    logger.setLevel(level)
+    
+    # Create formatters
+    file_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s'
+    )
     
-    # Create console handler
+    # Set up file handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(file_formatter)
+    file_handler.setLevel(level)
+    
+    # Set up console handler
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(log_level)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
+    console_handler.setLevel(level)
+    
+    # Remove any existing handlers
+    logger.handlers = []
+    
+    # Add handlers
+    logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     
-    # Create file handler if log_file is provided
-    if log_file:
-        # Create directory if it doesn't exist
-        log_dir = os.path.dirname(log_file)
-        if log_dir:
-            os.makedirs(log_dir, exist_ok=True)
-            
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(log_level)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+    return logger
+
+def get_module_logger(module_name: str) -> logging.Logger:
+    """
+    Get a logger for a specific module.
     
-    return logger 
+    Args:
+        module_name: Name of the module
+        
+    Returns:
+        Logger instance for the module
+    """
+    return logging.getLogger(module_name)
+
+# Default logging configuration
+def configure_default_logging():
+    """Configure default logging for the project"""
+    setup_logging(
+        log_file="benchmark.log",
+        level=logging.INFO
+    ) 

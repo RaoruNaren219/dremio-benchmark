@@ -1,24 +1,45 @@
+# Core dependencies
 pyspark==3.2.1
 pandas==1.3.5
+numpy==1.21.6
+pyarrow==10.0.1
+
+# Visualization dependencies
 matplotlib==3.5.3
 seaborn==0.11.2
+
+# HTTP and API dependencies
 requests==2.28.1
-numpy==1.21.6
 pyyaml==6.0
+
+# Testing dependencies
 pytest==7.2.0
 pytest-cov==4.0.0
+
+# Utility dependencies
 python-dotenv==0.21.0
-pyarrow==10.0.1
 joblib==1.2.0
-# Additional dependencies for Python-native HDFS operations
+
+# HDFS dependencies
+# Note: The hdfs package is not directly used in the code
+# but is included for potential future use
 hdfs==2.7.0
 
-# Kerberos dependencies
-kerberos==1.3.1
-gssapi==1.8.2
+# Kerberos dependencies (optional)
+# These are required only if using Kerberos authentication
+# Note: Some Kerberos packages may cause build issues on Windows
+# For Windows users, only requests-kerberos is included by default
 requests-kerberos==0.14.0
-pydoop==2.0.0
 
-# Note: If you're on Windows or WSL and having build issues with Kerberos packages,
-# please use requirements_windows.txt instead:
-# pip install -r requirements_windows.txt 
+# Platform-specific notes:
+# 1. For full Kerberos support on Linux/macOS, install:
+#    pip install kerberos==1.3.1 gssapi==1.8.2 pydoop==2.0.0
+#
+# 2. For Windows users:
+#    - Install MIT Kerberos for Windows: https://web.mit.edu/kerberos/dist/
+#    - Set up the correct environment variables
+#    - Or use WSL for Kerberos operations
+#
+# 3. For minimal setup without HDFS/Kerberos:
+#    - Remove hdfs and requests-kerberos from the requirements
+#    - Install only the core, visualization, HTTP, testing, and utility dependencies 
