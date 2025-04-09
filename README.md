@@ -75,7 +75,27 @@ source venv/bin/activate
 
 ### 3. Install Python dependencies
 
+For most users, install the minimal requirements first:
+
 ```bash
+pip install -r requirements_minimal.txt
+```
+
+If you need Kerberos authentication support:
+
+```bash
+# On Windows, install only requests-kerberos
+pip install requests-kerberos==0.14.0
+
+# On Linux/macOS, install system Kerberos libraries first
+# Ubuntu/Debian:
+sudo apt-get install libkrb5-dev
+# CentOS/RHEL:
+sudo yum install krb5-devel
+# macOS:
+brew install krb5
+
+# Then install the full requirements
 pip install -r requirements.txt
 ```
 
@@ -379,6 +399,24 @@ If you encounter issues:
 2. Verify your configuration settings
 3. Ensure all required services (Dremio, HDFS) are accessible
 4. For data generation issues, verify the TPC-DS toolkit is properly compiled
+
+### Common Issues
+
+#### Kerberos Package Build Failures
+
+If you encounter errors like "pyproject.toml failed to build installable wheels for some pyproject.toml based projects (gssapi, krb5)":
+
+1. **On Windows**:
+   - Use the minimal requirements file: `pip install -r requirements_minimal.txt`
+   - Install only requests-kerberos: `pip install requests-kerberos==0.14.0`
+   - Consider using WSL for Kerberos operations
+
+2. **On Linux/macOS**:
+   - Install system Kerberos development libraries:
+     * Ubuntu/Debian: `sudo apt-get install libkrb5-dev`
+     * CentOS/RHEL: `sudo yum install krb5-devel`
+     * macOS: `brew install krb5`
+   - Then try installing the Python packages again
 
 ## Security Considerations
 

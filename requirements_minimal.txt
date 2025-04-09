@@ -1,0 +1,27 @@
+# Core dependencies
+pyspark==3.2.1
+pandas==1.3.5
+numpy==1.21.6
+pyarrow==10.0.1
+
+# Visualization dependencies
+matplotlib==3.5.3
+seaborn==0.11.2
+
+# HTTP and API dependencies
+requests==2.28.1
+pyyaml==6.0
+
+# Testing dependencies
+pytest==7.2.0
+pytest-cov==4.0.0
+
+# Utility dependencies
+python-dotenv==0.21.0
+joblib==1.2.0
+
+# Note: HDFS and Kerberos packages are excluded from this minimal setup
+# If you need these features, please install them separately after setting up
+# the necessary system dependencies:
+# - For HDFS: pip install hdfs==2.7.0
+# - For Kerberos: pip install requests-kerberos==0.14.0 

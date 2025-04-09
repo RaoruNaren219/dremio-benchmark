@@ -42,4 +42,12 @@ requests-kerberos==0.14.0
 #
 # 3. For minimal setup without HDFS/Kerberos:
 #    - Remove hdfs and requests-kerberos from the requirements
-#    - Install only the core, visualization, HTTP, testing, and utility dependencies 
+#    - Install only the core, visualization, HTTP, testing, and utility dependencies
+#
+# 4. If you encounter build issues with Kerberos packages:
+#    - On Windows: Use only requests-kerberos and skip other Kerberos packages
+#    - On Linux/macOS: Install system Kerberos development libraries first:
+#      * Ubuntu/Debian: sudo apt-get install libkrb5-dev
+#      * CentOS/RHEL: sudo yum install krb5-devel
+#      * macOS: brew install krb5
+#    - Then try installing the Python packages again 
